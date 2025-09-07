@@ -1,31 +1,29 @@
 from flask import Flask, request, jsonify
-import requests 
-from bs4 import BeautifulSoup
-
-# Importe o seu script de raspagem. 
-# Mude 'dados_raspados' para o nome do seu arquivo de script.
+from dotenv import load_dotenv # Adicionado para carregar o arquivo .env
 from dados import extrair_dados_nota_fiscal
 
-app = Flask(__name__)
+# Adicionado para carregar as variáveis do arquivo .env no ambiente local
+load_dotenv() 
+
+app = Flask(__name__) #
 
 @app.route('/processar_nota', methods=['POST'])
 def processar_nota():
     try:
-        # Pega o link da nota fiscal do corpo da requisição POST
-        link_nota = request.json.get('url')
+        link_nota = request.json.get('url') #
         if not link_nota:
-            return jsonify({'erro': 'URL da nota fiscal não fornecida.'}), 400
+            return jsonify({'erro': 'URL da nota fiscal não fornecida.'}), 400 #
 
-        # Chama a sua função de raspagem para extrair os dados
-        dados_extraidos = extrair_dados_nota_fiscal(link_nota)
+        dados_extraidos = extrair_dados_nota_fiscal(link_nota) #
 
         if dados_extraidos:
-            return jsonify(dados_extraidos)
+            return jsonify(dados_extraidos) #
         else:
-            return jsonify({'erro': 'Não foi possível processar a nota fiscal.'}), 500
+            return jsonify({'erro': 'Não foi possível processar a nota fiscal.'}), 500 #
 
     except Exception as e:
-        return jsonify({'erro': str(e)}), 500
+        return jsonify({'erro': str(e)}), 500 #
 
 if __name__ == '__main__':
+    # Usamos host='0.0.0.0' para permitir conexões da sua rede local (seu celular)
     app.run(host='0.0.0.0', debug=True)
