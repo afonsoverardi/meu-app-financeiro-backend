@@ -37,6 +37,7 @@ pydantic==2.11.7
 pydantic_core==2.33.2
 pyparsing==3.2.3
 python-dateutil==2.9.0.post0
+python-dotenv==1.1.1
 pytz==2025.2
 reportlab==4.4.0
 requests==2.32.5
