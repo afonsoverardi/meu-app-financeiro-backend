@@ -6,14 +6,12 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# **** NOVA ROTA DE HEALTH CHECK ****
 @app.route('/')
 def health_check():
     """
-    Esta rota existe apenas para que a Render possa verificar se o servidor está no ar e saudável.
+    Esta rota existe para que a Render possa verificar se o servidor está no ar e saudável.
     """
     return jsonify({"status": "healthy"}), 200
-
 
 @app.route('/processar_nota', methods=['POST'])
 def processar_nota():
@@ -21,14 +19,11 @@ def processar_nota():
         link_nota = request.json.get('url')
         if not link_nota:
             return jsonify({'erro': 'URL da nota fiscal não fornecida.'}), 400
-
         dados_extraidos = extrair_dados_nota_fiscal(link_nota)
-
         if dados_extraidos:
             return jsonify(dados_extraidos)
         else:
             return jsonify({'erro': 'Não foi possível processar a nota fiscal.'}), 500
-
     except Exception as e:
         return jsonify({'erro': str(e)}), 500
 
@@ -37,19 +32,14 @@ def processar_imagem():
     try:
         if 'comprovante' not in request.files:
             return jsonify({'erro': 'Nenhum arquivo de imagem enviado.'}), 400
-        
         arquivo_imagem = request.files['comprovante']
-        
         dados_extraidos = analisar_imagem_comprovante(arquivo_imagem)
-        
         if dados_extraidos:
             return jsonify(dados_extraidos)
         else:
             return jsonify({'erro': 'Não foi possível analisar o comprovante.'}), 500
-
     except Exception as e:
         return jsonify({'erro': str(e)}), 500
-
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', debug=True)
