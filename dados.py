@@ -28,30 +28,6 @@ CATEGORIAS_PARA_PROMPT = ", ".join(f"'{cat}'" for cat in LISTA_DE_CATEGORIAS)
 # --- Fim da Configuração do Gemini ---
 
 
-# **** MODIFICADO: Bloco de configuração do Google Cloud Vision ****
-# Procura o arquivo de credenciais em dois locais possíveis
-render_credentials_path = "/etc/secrets/credentials.json"
-local_credentials_path = "credentials.json" # Para testes no seu PC
-
-CREDENTIALS_PATH = ""
-if os.path.exists(render_credentials_path):
-    CREDENTIALS_PATH = render_credentials_path
-elif os.path.exists(local_credentials_path):
-    CREDENTIALS_PATH = local_credentials_path
-
-vision_client = None
-if CREDENTIALS_PATH:
-    try:
-        credentials = service_account.Credentials.from_service_account_file(CREDENTIALS_PATH)
-        vision_client = vision.ImageAnnotatorClient(credentials=credentials)
-        print("Cliente do Google Cloud Vision inicializado com sucesso.")
-    except Exception as e:
-        print(f"### ERRO ao inicializar cliente do Google Cloud Vision: {e} ###")
-else:
-    print("AVISO: Arquivo de credenciais do Google Cloud Vision não encontrado.")
-# **** Fim da Modificação ****
-
-
 def classificar_local_com_ia(nome_local):
     if not model: return "Desconhecido"
     try:
@@ -178,10 +154,35 @@ def resumir_e_categorizar_compra_com_ia(texto_completo):
         return {"nome": "Compra em Cartão", "categoria": "Outros"}
 
 def analisar_imagem_comprovante(arquivo_imagem):
-    if not vision_client:
-        print("### ERRO CRÍTICO: Cliente do Google Cloud Vision não está inicializado. Verifique as credenciais. ###")
+    """
+    Recebe um arquivo de imagem, usa a Google Cloud Vision API para extrair o texto
+    e depois a Gemini API para analisar os dados.
+    """
+    vision_client = None
+    try:
+        # MODIFICADO: Inicialização do cliente movida para dentro da função
+        print("Tentando inicializar o cliente do Google Cloud Vision...")
+        render_credentials_path = "/etc/secrets/credentials.json"
+        local_credentials_path = "credentials.json"
+
+        CREDENTIALS_PATH = ""
+        if os.path.exists(render_credentials_path):
+            CREDENTIALS_PATH = render_credentials_path
+        elif os.path.exists(local_credentials_path):
+            CREDENTIALS_PATH = local_credentials_path
+
+        if CREDENTIALS_PATH:
+            credentials = service_account.Credentials.from_service_account_file(CREDENTIALS_PATH)
+            vision_client = vision.ImageAnnotatorClient(credentials=credentials)
+            print("-> Cliente do Google Cloud Vision inicializado com sucesso.")
+        else:
+            print("### ERRO CRÍTICO: Arquivo de credenciais 'credentials.json' não encontrado. ###")
+            return None
+    except Exception as e:
+        print(f"### ERRO CRÍTICO ao inicializar cliente do Google Cloud Vision: {e} ###")
         return None
 
+    # O resto da função continua se a inicialização foi bem-sucedida
     try:
         conteudo_imagem = arquivo_imagem.read()
         imagem_vision = vision.Image(content=conteudo_imagem)
