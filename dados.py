@@ -5,7 +5,6 @@ import google.generativeai as genai
 import os
 import json
 from PIL import Image
-# MODIFICADO: Trocamos o pytesseract pela biblioteca do Google Cloud Vision
 from google.cloud import vision
 from google.oauth2 import service_account
 
@@ -28,22 +27,29 @@ LISTA_DE_CATEGORIAS = [
 CATEGORIAS_PARA_PROMPT = ", ".join(f"'{cat}'" for cat in LISTA_DE_CATEGORIAS)
 # --- Fim da Configuração do Gemini ---
 
-# --- NOVO: Configuração do Google Cloud Vision ---
-# O caminho para o arquivo JSON de credenciais que a Render irá fornecer
-CREDENTIALS_PATH = "/etc/secrets/credentials.json"
 
-# Verifica se o arquivo de credenciais existe para criar o cliente da API
-if os.path.exists(CREDENTIALS_PATH):
+# **** MODIFICADO: Bloco de configuração do Google Cloud Vision ****
+# Procura o arquivo de credenciais em dois locais possíveis
+render_credentials_path = "/etc/secrets/credentials.json"
+local_credentials_path = "credentials.json" # Para testes no seu PC
+
+CREDENTIALS_PATH = ""
+if os.path.exists(render_credentials_path):
+    CREDENTIALS_PATH = render_credentials_path
+elif os.path.exists(local_credentials_path):
+    CREDENTIALS_PATH = local_credentials_path
+
+vision_client = None
+if CREDENTIALS_PATH:
     try:
         credentials = service_account.Credentials.from_service_account_file(CREDENTIALS_PATH)
         vision_client = vision.ImageAnnotatorClient(credentials=credentials)
         print("Cliente do Google Cloud Vision inicializado com sucesso.")
     except Exception as e:
-        vision_client = None
         print(f"### ERRO ao inicializar cliente do Google Cloud Vision: {e} ###")
 else:
-    vision_client = None
-    print("AVISO: Arquivo de credenciais do Google Cloud Vision não encontrado em ambiente de produção.")
+    print("AVISO: Arquivo de credenciais do Google Cloud Vision não encontrado.")
+# **** Fim da Modificação ****
 
 
 def classificar_local_com_ia(nome_local):
@@ -171,14 +177,9 @@ def resumir_e_categorizar_compra_com_ia(texto_completo):
         print(f"### ERRO ao resumir compra com IA: {e} ###")
         return {"nome": "Compra em Cartão", "categoria": "Outros"}
 
-# MODIFICADO: Esta função agora usa a Google Cloud Vision API
 def analisar_imagem_comprovante(arquivo_imagem):
-    """
-    Recebe um arquivo de imagem, usa a Google Cloud Vision API para extrair o texto
-    e depois a Gemini API para analisar os dados.
-    """
     if not vision_client:
-        print("### ERRO CRÍTICO: Cliente do Google Cloud Vision não está inicializado. Verifique o Secret File na Render. ###")
+        print("### ERRO CRÍTICO: Cliente do Google Cloud Vision não está inicializado. Verifique as credenciais. ###")
         return None
 
     try:
@@ -193,7 +194,6 @@ def analisar_imagem_comprovante(arquivo_imagem):
         print(texto_extraido)
         print("------------------------------------\n")
 
-        # O resto do fluxo continua o mesmo, usando o texto extraído
         nome_local_match = re.search(r"Estabelecimento:\s*(.*)", texto_extraido, re.IGNORECASE)
         data_match = re.search(r"(\d{2}/\d{2}/\d{4})", texto_extraido)
         valor_match = re.search(r"Valor:\s*R\$\s*([\d,]+\.?\d*)", texto_extraido, re.IGNORECASE)
