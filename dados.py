@@ -5,6 +5,7 @@ import google.generativeai as genai
 import os
 import json
 from PIL import Image
+# MODIFICADO: Trocamos pytesseract pela biblioteca do Google
 from google.cloud import vision
 from google.oauth2 import service_account
 
@@ -17,14 +18,16 @@ if API_KEY:
     genai.configure(api_key=API_KEY)
     model = genai.GenerativeModel('gemini-1.5-flash')
 else:
-    print("AVISO: GEMINI_API_KEY não foi encontrada no ambiente.")
+    print("AVISO DE SEGURANÇA: A variável de ambiente GEMINI_API_KEY não foi encontrada.")
+    model = None
 
 # 2. Configuração do Google Cloud Vision (para ler imagens - OCR)
 vision_client = None
+# Procura o arquivo de credenciais em dois locais possíveis
 render_credentials_path = "/etc/secrets/credentials.json"
-local_credentials_path = "credentials.json"
-CREDENTIALS_PATH = ""
+local_credentials_path = "credentials.json" # Para testes no seu PC
 
+CREDENTIALS_PATH = ""
 if os.path.exists(render_credentials_path):
     CREDENTIALS_PATH = render_credentials_path
 elif os.path.exists(local_credentials_path):
@@ -72,7 +75,7 @@ def categorizar_lista_inteira_com_ia(itens, tipo_local):
         lista_formatada = "\n".join(f"- {nome}" for nome in nomes_itens)
         prompt = (f"A compra a seguir foi feita em um '{tipo_local}'. "
                   f"Analise a lista de itens e retorne um array JSON com a categoria de cada um, escolhida da lista [{CATEGORIAS_PARA_PROMPT}].\n"
-                  f"Use a categoria 'Outros' para itens que não se encaixam bem nas demais.\n"
+                  f"Use a categoria 'Outros' para itens muito específicos que não se encaixam bem nas demais.\n"
                   f"Contexto: 'doguinho' em um 'Posto de Combustível' é 'Alimentação'. 'Gasolina' é 'Carro'.\n"
                   f"Lista:\n{lista_formatada}\n"
                   "O JSON de saída deve ter o formato: [{\"item\": \"NOME_DO_ITEM\", \"categoria\": \"CATEGORIA_ESCOLHIDA\"}]")
@@ -106,19 +109,23 @@ def extrair_dados_nota_fiscal(url):
         response = requests.get(url)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
+
         info_local_div = soup.find('div', class_='txtCenter')
         nome_local = "Não encontrado"
         if info_local_div:
             nome_local_el = info_local_div.find('div', id='u20', class_='txtTopo')
             if nome_local_el: nome_local = nome_local_el.text.strip()
+
         print(f"Classificando o local: '{nome_local}'...")
         tipo_local = classificar_local_com_ia(nome_local)
         print(f"-> Tipo de local identificado: '{tipo_local}'")
+
         data_el = soup.find('strong', string=re.compile(r'Emissão:'))
         data_emissao = "Não encontrada"
         if data_el:
             data_limpa = re.search(r'(\d{2}/\d{2}/\d{4})', data_el.next_sibling.strip())
             if data_limpa: data_emissao = data_limpa.group(1)
+        
         itens_brutos = []
         titulos_itens = soup.find_all('span', class_='txtTit')
         for titulo in titulos_itens:
@@ -132,14 +139,18 @@ def extrair_dados_nota_fiscal(url):
                     'quantidade': float(quantidade_el.text.strip().replace('Qtde.:', '')),
                     'valor_unitario': float(valor_unitario_el.text.strip().replace('Vl. Unit.:', '').replace(',', '.')),
                 })
+        
         print(f"Enviando {len(itens_brutos)} itens para categorização em lote...")
         mapa_categorias_ia = categorizar_lista_inteira_com_ia(itens_brutos, tipo_local)
+
         itens_comprados = []
         for item in itens_brutos:
             item['categoria'] = mapa_categorias_ia.get(item['nome'], 'Não Categorizado')
             itens_comprados.append(item)
+        
         valor_total_el = soup.find('span', class_='valor')
         valor_total_limpo = float(valor_total_el.text.strip().replace(',', '.')) if valor_total_el else None
+
         return {
             'data': data_emissao,
             'itens_comprados': itens_comprados,
@@ -156,25 +167,33 @@ def analisar_imagem_comprovante(arquivo_imagem):
     try:
         conteudo_imagem = arquivo_imagem.read()
         imagem_vision = vision.Image(content=conteudo_imagem)
+
         print("Enviando imagem para a Google Cloud Vision API...")
         response = vision_client.document_text_detection(image=imagem_vision)
         texto_extraido = response.full_text_annotation.text
+        
         print("\n--- Texto extraído pela Vision API ---")
         print(texto_extraido)
         print("------------------------------------\n")
+
         data_match = re.search(r"(\d{2}/\d{2}/\d{4})", texto_extraido)
+        # Regex aprimorada para buscar por 'valor' ou 'total'
         valor_match = re.search(r"(?:TOTAL|Valor:)\s*R\$\s*([\d,]+\.?\d*)", texto_extraido, re.IGNORECASE)
+
         data_compra = data_match.group(1) if data_match else "Data não encontrada"
         valor_total = float(valor_match.group(1).replace(',', '.')) if valor_match else 0.0
+
         print(f"Enviando texto para IA resumir e categorizar...")
         resumo_ia = resumir_e_categorizar_compra_com_ia(texto_extraido)
         print(f"-> Resumo da IA: {resumo_ia}")
+
         item_unico = {
             'nome': resumo_ia.get('nome', 'Compra em Cartão'),
             'quantidade': 1.0,
             'valor_unitario': valor_total,
             'categoria': resumo_ia.get('categoria', 'Outros')
         }
+        
         return {
             'data': data_compra,
             'itens_comprados': [item_unico],
