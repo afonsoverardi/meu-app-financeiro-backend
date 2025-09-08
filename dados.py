@@ -4,9 +4,10 @@ import re
 import google.generativeai as genai
 import os
 import json
-from PIL import Image
-from google.cloud import vision
-from google.oauth2 import service_account
+# As importações de OCR foram desativadas para o teste
+# from PIL import Image
+# from google.cloud import vision
+# from google.oauth2 import service_account
 
 # --- Início da Configuração do Gemini ---
 API_KEY = os.getenv('GEMINI_API_KEY')
@@ -27,6 +28,7 @@ LISTA_DE_CATEGORIAS = [
 CATEGORIAS_PARA_PROMPT = ", ".join(f"'{cat}'" for cat in LISTA_DE_CATEGORIAS)
 # --- Fim da Configuração do Gemini ---
 
+# A inicialização do Google Cloud Vision foi desativada para este teste
 
 def classificar_local_com_ia(nome_local):
     if not model: return "Desconhecido"
@@ -153,73 +155,12 @@ def resumir_e_categorizar_compra_com_ia(texto_completo):
         print(f"### ERRO ao resumir compra com IA: {e} ###")
         return {"nome": "Compra em Cartão", "categoria": "Outros"}
 
+# **** FUNÇÃO DE OCR TEMPORARIAMENTE DESABILITADA PARA TESTE ****
 def analisar_imagem_comprovante(arquivo_imagem):
     """
-    Recebe um arquivo de imagem, usa a Google Cloud Vision API para extrair o texto
-    e depois a Gemini API para analisar os dados.
+    Função de teste que retorna um erro controlado para verificar se os logs funcionam.
     """
-    vision_client = None
-    try:
-        # MODIFICADO: Inicialização do cliente movida para dentro da função
-        print("Tentando inicializar o cliente do Google Cloud Vision...")
-        render_credentials_path = "/etc/secrets/credentials.json"
-        local_credentials_path = "credentials.json"
-
-        CREDENTIALS_PATH = ""
-        if os.path.exists(render_credentials_path):
-            CREDENTIALS_PATH = render_credentials_path
-        elif os.path.exists(local_credentials_path):
-            CREDENTIALS_PATH = local_credentials_path
-
-        if CREDENTIALS_PATH:
-            credentials = service_account.Credentials.from_service_account_file(CREDENTIALS_PATH)
-            vision_client = vision.ImageAnnotatorClient(credentials=credentials)
-            print("-> Cliente do Google Cloud Vision inicializado com sucesso.")
-        else:
-            print("### ERRO CRÍTICO: Arquivo de credenciais 'credentials.json' não encontrado. ###")
-            return None
-    except Exception as e:
-        print(f"### ERRO CRÍTICO ao inicializar cliente do Google Cloud Vision: {e} ###")
-        return None
-
-    # O resto da função continua se a inicialização foi bem-sucedida
-    try:
-        conteudo_imagem = arquivo_imagem.read()
-        imagem_vision = vision.Image(content=conteudo_imagem)
-
-        print("Enviando imagem para a Google Cloud Vision API...")
-        response = vision_client.document_text_detection(image=imagem_vision)
-        texto_extraido = response.full_text_annotation.text
-        
-        print("\n--- Texto extraído pela Vision API ---")
-        print(texto_extraido)
-        print("------------------------------------\n")
-
-        nome_local_match = re.search(r"Estabelecimento:\s*(.*)", texto_extraido, re.IGNORECASE)
-        data_match = re.search(r"(\d{2}/\d{2}/\d{4})", texto_extraido)
-        valor_match = re.search(r"Valor:\s*R\$\s*([\d,]+\.?\d*)", texto_extraido, re.IGNORECASE)
-
-        nome_local = nome_local_match.group(1).strip() if nome_local_match else "Não identificado"
-        data_compra = data_match.group(1) if data_match else "Data não encontrada"
-        valor_total = float(valor_match.group(1).replace(',', '.')) if valor_match else 0.0
-
-        print(f"Enviando texto para IA resumir e categorizar...")
-        resumo_ia = resumir_e_categorizar_compra_com_ia(texto_extraido)
-        print(f"-> Resumo da IA: {resumo_ia}")
-
-        item_unico = {
-            'nome': resumo_ia.get('nome', 'Compra em Cartão'),
-            'quantidade': 1.0,
-            'valor_unitario': valor_total,
-            'categoria': resumo_ia.get('categoria', 'Outros')
-        }
-        
-        return {
-            'nome_local': nome_local,
-            'data': data_compra,
-            'itens_comprados': [item_unico],
-            'valor_total': valor_total
-        }
-    except Exception as e:
-        print(f"Erro no processamento com a Vision API: {e}")
-        return None
+    print("--- FUNÇÃO DE OCR FOI CHAMADA (VERSÃO DE TESTE) ---")
+    print("--- A LÓGICA DO GOOGLE VISION ESTÁ DESATIVADA ---")
+    # Retornamos None para simular um erro e forçar a resposta de erro 500
+    return None
