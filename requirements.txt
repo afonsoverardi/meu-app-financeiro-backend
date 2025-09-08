@@ -5,3 +5,4 @@ beautifulsoup4
 google-generativeai
 google-cloud-vision
 python-dotenv
+Pillow
