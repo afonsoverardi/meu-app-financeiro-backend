@@ -6,6 +6,15 @@ load_dotenv()
 
 app = Flask(__name__)
 
+# **** NOVA ROTA DE HEALTH CHECK ****
+@app.route('/')
+def health_check():
+    """
+    Esta rota existe apenas para que a Render possa verificar se o servidor está no ar e saudável.
+    """
+    return jsonify({"status": "healthy"}), 200
+
+
 @app.route('/processar_nota', methods=['POST'])
 def processar_nota():
     try:
@@ -40,6 +49,7 @@ def processar_imagem():
 
     except Exception as e:
         return jsonify({'erro': str(e)}), 500
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', debug=True)
