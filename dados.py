@@ -5,7 +5,9 @@ import google.generativeai as genai
 import os
 import json
 from PIL import Image
-import pytesseract
+# MODIFICADO: Trocamos o pytesseract pela biblioteca do Google Cloud Vision
+from google.cloud import vision
+from google.oauth2 import service_account
 
 # --- Início da Configuração do Gemini ---
 API_KEY = os.getenv('GEMINI_API_KEY')
@@ -25,6 +27,24 @@ LISTA_DE_CATEGORIAS = [
 ]
 CATEGORIAS_PARA_PROMPT = ", ".join(f"'{cat}'" for cat in LISTA_DE_CATEGORIAS)
 # --- Fim da Configuração do Gemini ---
+
+# --- NOVO: Configuração do Google Cloud Vision ---
+# O caminho para o arquivo JSON de credenciais que a Render irá fornecer
+CREDENTIALS_PATH = "/etc/secrets/credentials.json"
+
+# Verifica se o arquivo de credenciais existe para criar o cliente da API
+if os.path.exists(CREDENTIALS_PATH):
+    try:
+        credentials = service_account.Credentials.from_service_account_file(CREDENTIALS_PATH)
+        vision_client = vision.ImageAnnotatorClient(credentials=credentials)
+        print("Cliente do Google Cloud Vision inicializado com sucesso.")
+    except Exception as e:
+        vision_client = None
+        print(f"### ERRO ao inicializar cliente do Google Cloud Vision: {e} ###")
+else:
+    vision_client = None
+    print("AVISO: Arquivo de credenciais do Google Cloud Vision não encontrado em ambiente de produção.")
+
 
 def classificar_local_com_ia(nome_local):
     if not model: return "Desconhecido"
@@ -48,7 +68,7 @@ def categorizar_lista_inteira_com_ia(itens, tipo_local):
         prompt = (f"A compra a seguir foi feita em um '{tipo_local}'. "
                   f"Analise a lista de itens e retorne um array JSON com a categoria de cada um, escolhida da lista [{CATEGORIAS_PARA_PROMPT}].\n"
                   f"Use a categoria 'Outros' para itens muito específicos que não se encaixam bem nas demais.\n"
-                  f"Leve em conta o contexto. Exemplo: 'gasolina' em um 'Posto de Comb-stível' deve ser 'Carro'.\n"
+                  f"Leve em conta o contexto. Exemplo: 'gasolina' em um 'Posto de Combustível' deve ser 'Carro'.\n"
                   f"Lista:\n{lista_formatada}\n"
                   "O JSON de saída deve ter o formato: [{\"item\": \"NOME_DO_ITEM\", \"categoria\": \"CATEGORIA_ESCOLHIDA\"}]")
         
@@ -151,14 +171,29 @@ def resumir_e_categorizar_compra_com_ia(texto_completo):
         print(f"### ERRO ao resumir compra com IA: {e} ###")
         return {"nome": "Compra em Cartão", "categoria": "Outros"}
 
+# MODIFICADO: Esta função agora usa a Google Cloud Vision API
 def analisar_imagem_comprovante(arquivo_imagem):
+    """
+    Recebe um arquivo de imagem, usa a Google Cloud Vision API para extrair o texto
+    e depois a Gemini API para analisar os dados.
+    """
+    if not vision_client:
+        print("### ERRO CRÍTICO: Cliente do Google Cloud Vision não está inicializado. Verifique o Secret File na Render. ###")
+        return None
+
     try:
-        imagem = Image.open(arquivo_imagem.stream)
-        texto_extraido = pytesseract.image_to_string(imagem, lang='por')
-        print("\n--- Texto extraído do comprovante ---")
+        conteudo_imagem = arquivo_imagem.read()
+        imagem_vision = vision.Image(content=conteudo_imagem)
+
+        print("Enviando imagem para a Google Cloud Vision API...")
+        response = vision_client.document_text_detection(image=imagem_vision)
+        texto_extraido = response.full_text_annotation.text
+        
+        print("\n--- Texto extraído pela Vision API ---")
         print(texto_extraido)
         print("------------------------------------\n")
 
+        # O resto do fluxo continua o mesmo, usando o texto extraído
         nome_local_match = re.search(r"Estabelecimento:\s*(.*)", texto_extraido, re.IGNORECASE)
         data_match = re.search(r"(\d{2}/\d{2}/\d{4})", texto_extraido)
         valor_match = re.search(r"Valor:\s*R\$\s*([\d,]+\.?\d*)", texto_extraido, re.IGNORECASE)
@@ -185,5 +220,5 @@ def analisar_imagem_comprovante(arquivo_imagem):
             'valor_total': valor_total
         }
     except Exception as e:
-        print(f"Erro no processamento OCR: {e}")
+        print(f"Erro no processamento com a Vision API: {e}")
         return None
