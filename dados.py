@@ -158,19 +158,21 @@ def analisar_imagem_comprovante(arquivo_imagem):
         print(texto_extraido)
         print("------------------------------------\n")
         
+        # **** LÓGICA DE EXTRAÇÃO DE DATA E VALOR APRIMORADA ****
+        
         # Extração da Data
         data_match = re.search(r"(\d{2}/\d{2}/\d{2,4})", texto_extraido)
         if data_match:
             data_compra = data_match.group(1)
             partes_data = data_compra.split('/')
-            if len(partes_data[2]) == 2:
+            if len(partes_data) == 3 and len(partes_data[2]) == 2:
                 partes_data[2] = "20" + partes_data[2]
                 data_compra = "/".join(partes_data)
         else:
             data_compra = datetime.now().strftime("%d/%m/%Y")
             print("AVISO: Nenhuma data encontrada, usando a data de hoje.")
         
-        # **** LÓGICA DE EXTRAÇÃO DE VALOR APRIMORADA ****
+        # Extração do Valor (método mais robusto)
         valor_total = 0.0
         # Encontra todos os números no formato de dinheiro (ex: 40,98 ou 1.234,56)
         # Esta regex procura por números com 2 casas decimais, separados por vírgula ou ponto.
