@@ -144,6 +144,36 @@ def extrair_dados_nota_fiscal(url):
         print(f"Erro ao extrair dados da nota fiscal: {e}")
         return None
 
+# **** NOVA FUNÇÃO AUXILIAR PARA TRATAR VALORES MONETÁRIOS ****
+def converter_valor_brasileiro(valor_str):
+    """Converte uma string de valor no formato brasileiro (ex: '1.234,56' ou '40.98') para float."""
+    if not valor_str:
+        return 0.0
+    
+    # Remove espaços e o símbolo R$
+    valor_limpo = valor_str.strip().replace("R$", "")
+    
+    # Se contém vírgula, assume que é o separador decimal
+    if ',' in valor_limpo:
+        # Remove pontos de milhar e troca a vírgula por ponto decimal
+        valor_final_str = valor_limpo.replace('.', '').replace(',', '.')
+    # Se não contém vírgula, mas contém ponto
+    elif '.' in valor_limpo:
+        # Se o último ponto separa apenas 2 dígitos, é um decimal (caso do OCR)
+        if valor_limpo.rfind('.') == len(valor_limpo) - 3:
+             valor_final_str = valor_limpo.replace('.', '', valor_limpo.count('.') - 1)
+        # Senão, é um separador de milhar e deve ser removido
+        else:
+            valor_final_str = valor_limpo.replace('.', '')
+    else:
+        # Caso não tenha nenhum separador (ex: '100')
+        valor_final_str = valor_limpo
+        
+    try:
+        return float(valor_final_str)
+    except ValueError:
+        return 0.0
+
 def analisar_imagem_comprovante(arquivo_imagem):
     if not vision_client:
         print("### ERRO CRÍTICO: Cliente do Google Cloud Vision não está inicializado. Verifique as credenciais. ###")
@@ -158,8 +188,6 @@ def analisar_imagem_comprovante(arquivo_imagem):
         print(texto_extraido)
         print("------------------------------------\n")
         
-        # **** LÓGICA DE EXTRAÇÃO DE DATA E VALOR APRIMORADA ****
-        
         # Extração da Data
         data_match = re.search(r"(\d{2}/\d{2}/\d{2,4})", texto_extraido)
         if data_match:
@@ -172,15 +200,18 @@ def analisar_imagem_comprovante(arquivo_imagem):
             data_compra = datetime.now().strftime("%d/%m/%Y")
             print("AVISO: Nenhuma data encontrada, usando a data de hoje.")
         
-        # Extração do Valor (método mais robusto)
+        # **** LÓGICA DE EXTRAÇÃO DE VALOR APRIMORADA ****
         valor_total = 0.0
-        # Encontra todos os números no formato de dinheiro (ex: 40,98 ou 1.234,56)
-        # Esta regex procura por números com 2 casas decimais, separados por vírgula ou ponto.
+        # Encontra todos os números que parecem dinheiro
         valores_encontrados = re.findall(r"[\d,]+\.\d{2}|[\d\.]+\,\d{2}", texto_extraido)
+        
         if valores_encontrados:
             # Pega o ÚLTIMO valor encontrado, que é geralmente o total
             ultimo_valor_str = valores_encontrados[-1]
-            valor_total = float(ultimo_valor_str.replace('.', '').replace(',', '.'))
+            # Usa a nova função para converter corretamente
+            valor_total = converter_valor_brasileiro(ultimo_valor_str)
+        else:
+            print("AVISO: Nenhum valor monetário encontrado no comprovante.")
 
         print(f"-> Data encontrada: {data_compra} | Valor encontrado: {valor_total}")
         
