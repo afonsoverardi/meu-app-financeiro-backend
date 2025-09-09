@@ -98,6 +98,12 @@ def resumir_e_categorizar_compra_com_ia(texto_completo):
 
 def extrair_dados_nota_fiscal(url):
     try:
+        # **** CORREÇÃO 1: Validação da URL ****
+        # Se o texto do QR Code não for um link, retorna None imediatamente.
+        if not url.startswith('http'):
+            print(f"AVISO: O dado '{url}' não é uma URL válida. Ignorando.")
+            return None
+
         response = requests.get(url)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
@@ -122,10 +128,15 @@ def extrair_dados_nota_fiscal(url):
             quantidade_el = td_pai.find('span', class_='Rqtd')
             valor_unitario_el = td_pai.find('span', class_='RvlUnit')
             if quantidade_el and valor_unitario_el:
+                # **** CORREÇÃO 2: Conversão da quantidade ****
+                # Adiciona .replace(',', '.') para tratar quantidades com vírgula.
+                quantidade_limpa = quantidade_el.text.strip().replace('Qtde.:', '').replace(',', '.')
+                valor_unitario_limpo = valor_unitario_el.text.strip().replace('Vl. Unit.:', '').replace(',', '.')
+                
                 itens_brutos.append({
                     'nome': nome_item,
-                    'quantidade': float(quantidade_el.text.strip().replace('Qtde.:', '')),
-                    'valor_unitario': float(valor_unitario_el.text.strip().replace('Vl. Unit.:', '').replace(',', '.')),
+                    'quantidade': float(quantidade_limpa),
+                    'valor_unitario': float(valor_unitario_limpo),
                 })
         print(f"Enviando {len(itens_brutos)} itens para categorização em lote...")
         mapa_categorias_ia = categorizar_lista_inteira_com_ia(itens_brutos, tipo_local)
