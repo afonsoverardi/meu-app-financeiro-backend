@@ -83,7 +83,7 @@ def resumir_e_categorizar_compra_com_ia(texto_completo):
     if not model: return {"nome": "Compra em Cartão", "categoria": "Outros"}
     try:
         prompt = (f"Analise o texto de um comprovante: '{texto_completo}'.\n"
-                  f"Crie um nome curto para esta compra (ex: 'Remédios', 'Combustível') "
+                  f"Crie um nome curto para esta compra (ex: 'Remédios', 'Combustível', 'Restaurante', 'Lanche') "
                   f"e escolha a categoria mais apropriada da lista: [{CATEGORIAS_PARA_PROMPT}].\n"
                   "Responda com um JSON no formato: {\"nome\": \"NOME_SUGERIDO\", \"categoria\": \"CATEGORIA_SUGERIDA\"}")
         response = model.generate_content(prompt)
@@ -98,8 +98,6 @@ def resumir_e_categorizar_compra_com_ia(texto_completo):
 
 def extrair_dados_nota_fiscal(url):
     try:
-        # **** CORREÇÃO 1: Validação da URL ****
-        # Se o texto do QR Code não for um link, retorna None imediatamente.
         if not url.startswith('http'):
             print(f"AVISO: O dado '{url}' não é uma URL válida. Ignorando.")
             return None
@@ -128,8 +126,6 @@ def extrair_dados_nota_fiscal(url):
             quantidade_el = td_pai.find('span', class_='Rqtd')
             valor_unitario_el = td_pai.find('span', class_='RvlUnit')
             if quantidade_el and valor_unitario_el:
-                # **** CORREÇÃO 2: Conversão da quantidade ****
-                # Adiciona .replace(',', '.') para tratar quantidades com vírgula.
                 quantidade_limpa = quantidade_el.text.strip().replace('Qtde.:', '').replace(',', '.')
                 valor_unitario_limpo = valor_unitario_el.text.strip().replace('Vl. Unit.:', '').replace(',', '.')
                 
@@ -187,6 +183,7 @@ def analisar_imagem_comprovante(arquivo_imagem):
         print(texto_extraido)
         print("------------------------------------\n")
         
+        # Extração da Data
         data_match = re.search(r"(\d{2}/\d{2}/\d{2,4})", texto_extraido)
         if data_match:
             data_compra = data_match.group(1)
@@ -198,13 +195,23 @@ def analisar_imagem_comprovante(arquivo_imagem):
             data_compra = datetime.now().strftime("%d/%m/%Y")
             print("AVISO: Nenhuma data encontrada, usando a data de hoje.")
         
+        # **** LÓGICA DE EXTRAÇÃO DE VALOR CORRIGIDA E ROBUSTA ****
         valor_total = 0.0
+        valor_encontrado = False # Começa como Falso
+        
+        # Procura por todos os números que se parecem com dinheiro
         valores_encontrados = re.findall(r"[\d,]+\.\d{2}|[\d\.]+\,\d{2}", texto_extraido)
+        
         if valores_encontrados:
             ultimo_valor_str = valores_encontrados[-1]
             valor_total = converter_valor_brasileiro(ultimo_valor_str)
-        else:
-            print("AVISO: Nenhum valor monetário encontrado no comprovante.")
+            
+            # Apenas considera "encontrado" se o valor for maior que zero.
+            if valor_total > 0:
+                valor_encontrado = True
+        
+        if not valor_encontrado:
+             print("AVISO: Nenhum valor monetário válido (> 0) foi encontrado no comprovante.")
 
         print(f"-> Data encontrada: {data_compra} | Valor encontrado: {valor_total}")
         
@@ -222,7 +229,8 @@ def analisar_imagem_comprovante(arquivo_imagem):
         return {
             'data': data_compra,
             'itens_comprados': [item_unico],
-            'valor_total': valor_total
+            'valor_total': valor_total,
+            'valor_encontrado': valor_encontrado
         }
     except Exception as e:
         print(f"Erro no processamento com a Vision API: {e}")
