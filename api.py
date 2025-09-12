@@ -7,18 +7,16 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, JWTManager
 
-# Carrega as variáveis de ambiente do arquivo .env (ótimo para desenvolvimento local)
+# IMPORTANTE: Adicione as funções do seu arquivo de dados
+from dados import extrair_dados_nota_fiscal, analisar_imagem_comprovante
+
+# Carrega as variáveis de ambiente do arquivo .env
 load_dotenv()
 
 # --- Configuração Inicial ---
 app = Flask(__name__)
-
-# Configura a conexão com o banco de dados usando a variável de ambiente
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-
-# Configura a chave secreta para o JWT (JSON Web Tokens)
-# IMPORTANTE: Mude isso para uma string aleatória e segura em produção!
 app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'super-secret-key-change-me')
 
 # --- Inicialização das Extensões ---
@@ -26,15 +24,14 @@ db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 jwt = JWTManager(app)
 
-# --- Modelos do Banco de Dados (As "plantas" das nossas tabelas) ---
+# --- Modelos do Banco de Dados ---
 
 class User(db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(120), unique=True, nullable=False)
-    password_hash = db.Column(db.String(256), nullable=False)
+    password_hash = db.Column(db.String(256), nullable=False) # Já corrigido
 
-    # Relacionamentos (links para outras tabelas)
     compras = db.relationship('Compra', backref='user', lazy=True, cascade="all, delete-orphan")
     custos_fixos = db.relationship('CustoFixo', backref='user', lazy=True, cascade="all, delete-orphan")
 
@@ -52,7 +49,6 @@ class Compra(db.Model):
     valor_unitario = db.Column(db.Float, nullable=False)
     data = db.Column(db.String(10), nullable=False)
     categoria = db.Column(db.String(50))
-    # Chave estrangeira para ligar a compra a um usuário
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
 
 class CustoFixo(db.Model):
@@ -64,18 +60,15 @@ class CustoFixo(db.Model):
     tipo_recorrencia = db.Column(db.String(20), nullable=False)
     dia_do_mes = db.Column(db.Integer, nullable=False)
     mes_de_inicio = db.Column(db.Integer, nullable=False, default=1)
-    # Chave estrangeeira para ligar o custo fixo a um usuário
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
 
 
-# --- Rotas (Endpoints da API) ---
+# --- Rotas de Autenticação ---
 
-# Rota de Health Check (para a Render saber que o app está no ar)
 @app.route('/')
 def health_check():
     return jsonify({"status": "healthy"}), 200
 
-# Rota para Registrar um novo usuário
 @app.route('/register', methods=['POST'])
 def register():
     data = request.get_json()
@@ -95,26 +88,58 @@ def register():
 
     return jsonify({"mensagem": "Usuário criado com sucesso!"}), 201
 
-# Rota para Fazer Login
 @app.route('/login', methods=['POST'])
 def login():
     data = request.get_json()
     email = data.get('email')
     password = data.get('password')
-
     user = User.query.filter_by(email=email).first()
-
     if user and user.check_password(password):
         access_token = create_access_token(identity=user.id)
         return jsonify(access_token=access_token)
-
     return jsonify({"erro": "Credenciais inválidas"}), 401
 
+# --- ROTAS PROTEGIDAS ---
 
-# As rotas /processar_nota e /processar_imagem serão protegidas e adaptadas depois
-# Por enquanto, vamos nos concentrar em fazer a base de usuários funcionar.
+@app.route('/processar_nota', methods=['POST'])
+@jwt_required() # <--- AQUI ESTÁ A TRANCA!
+def processar_nota():
+    # Pega o ID do usuário a partir do token
+    current_user_id = get_jwt_identity()
+    print(f"Requisição recebida para o usuário ID: {current_user_id}")
+
+    link_nota = request.json.get('url')
+    if not link_nota:
+        return jsonify({'erro': 'URL da nota fiscal não fornecida.'}), 400
+
+    dados_extraidos = extrair_dados_nota_fiscal(link_nota)
+
+    if dados_extraidos:
+        # Futuramente, aqui salvaremos as compras associadas ao current_user_id
+        return jsonify(dados_extraidos)
+    else:
+        return jsonify({'erro': 'Não foi possível processar a nota fiscal.'}), 500
+
+
+@app.route('/processar_imagem', methods=['POST'])
+@jwt_required() # <--- AQUI ESTÁ A TRANCA!
+def processar_imagem():
+    # Pega o ID do usuário a partir do token
+    current_user_id = get_jwt_identity()
+    print(f"Requisição de imagem recebida para o usuário ID: {current_user_id}")
+    
+    if 'comprovante' not in request.files:
+        return jsonify({'erro': 'Nenhum arquivo de imagem enviado.'}), 400
+    
+    arquivo_imagem = request.files['comprovante']
+    dados_extraidos = analisar_imagem_comprovante(arquivo_imagem)
+    
+    if dados_extraidos:
+        # Futuramente, aqui salvaremos a compra associada ao current_user_id
+        return jsonify(dados_extraidos)
+    else:
+        return jsonify({'erro': 'Não foi possível analisar o comprovante.'}), 500
 
 
 if __name__ == '__main__':
-    # O host '0.0.0.0' faz o app ser acessível na rede local
     app.run(host='0.0.0.0', port=os.getenv('PORT', 5000))
