@@ -21,6 +21,7 @@ migrate = Migrate(app, db)
 jwt = JWTManager(app)
 
 # --- Modelos do Banco de Dados ---
+# ... (Nenhuma mudança nos modelos)
 class User(db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
@@ -29,11 +30,8 @@ class User(db.Model):
     compras = db.relationship('Compra', backref='user', lazy=True, cascade="all, delete-orphan")
     custos_fixos = db.relationship('CustoFixo', backref='user', lazy=True, cascade="all, delete-orphan")
 
-    def set_password(self, password):
-        self.password_hash = generate_password_hash(password)
-
-    def check_password(self, password):
-        return check_password_hash(self.password_hash, password)
+    def set_password(self, password): self.password_hash = generate_password_hash(password)
+    def check_password(self, password): return check_password_hash(self.password_hash, password)
 
 class Compra(db.Model):
     __tablename__ = 'compras'
@@ -47,12 +45,8 @@ class Compra(db.Model):
 
     def to_dict(self):
         return {
-            'id': self.id,
-            'nome': self.nome,
-            'quantidade': self.quantidade,
-            'valorUnitario': self.valor_unitario,
-            'data': self.data,
-            'categoria': self.categoria
+            'id': self.id, 'nome': self.nome, 'quantidade': self.quantidade,
+            'valorUnitario': self.valor_unitario, 'data': self.data, 'categoria': self.categoria
         }
 
 class CustoFixo(db.Model):
@@ -127,24 +121,45 @@ def add_compra():
     db.session.commit()
     return jsonify(nova_compra.to_dict()), 201
 
-# ROTA PARA DELETAR COMPRAS
 @app.route('/compras/<int:compra_id>', methods=['DELETE'])
 @jwt_required()
 def delete_compra(compra_id):
     current_user_id = int(get_jwt_identity())
-    
     compra_para_deletar = Compra.query.get(compra_id)
-    
-    if not compra_para_deletar:
-        return jsonify({'erro': 'Compra não encontrada'}), 404
-    
-    if compra_para_deletar.user_id != current_user_id:
-        return jsonify({'erro': 'Acesso não autorizado para deletar esta compra'}), 403
-    
+    if not compra_para_deletar: return jsonify({'erro': 'Compra não encontrada'}), 404
+    if compra_para_deletar.user_id != current_user_id: return jsonify({'erro': 'Acesso não autorizado'}), 403
     db.session.delete(compra_para_deletar)
     db.session.commit()
-    
     return jsonify({'mensagem': 'Compra deletada com sucesso'}), 200
+
+# NOVA ROTA PARA ATUALIZAR COMPRAS
+@app.route('/compras/<int:compra_id>', methods=['PUT'])
+@jwt_required()
+def update_compra(compra_id):
+    current_user_id = int(get_jwt_identity())
+    
+    compra_para_atualizar = Compra.query.get(compra_id)
+    
+    if not compra_para_atualizar:
+        return jsonify({'erro': 'Compra não encontrada'}), 404
+    
+    if compra_para_atualizar.user_id != current_user_id:
+        return jsonify({'erro': 'Acesso não autorizado para editar esta compra'}), 403
+        
+    dados = request.get_json()
+    if not dados:
+        return jsonify({'erro': 'Nenhum dado fornecido para atualização'}), 400
+        
+    # Atualiza os campos do objeto com os novos dados recebidos
+    compra_para_atualizar.nome = dados.get('nome', compra_para_atualizar.nome)
+    compra_para_atualizar.quantidade = dados.get('quantidade', compra_para_atualizar.quantidade)
+    compra_para_atualizar.valor_unitario = dados.get('valor_unitario', compra_para_atualizar.valor_unitario)
+    compra_para_atualizar.data = dados.get('data', compra_para_atualizar.data)
+    compra_para_atualizar.categoria = dados.get('categoria', compra_para_atualizar.categoria)
+    
+    db.session.commit()
+    
+    return jsonify(compra_para_atualizar.to_dict()), 200
 
 
 if __name__ == '__main__':
