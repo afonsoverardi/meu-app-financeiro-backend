@@ -24,6 +24,7 @@ jwt = JWTManager(app)
 # --- Modelos do Banco de Dados ---
 
 class User(db.Model):
+    # ... (nenhuma mudança aqui)
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(120), unique=True, nullable=False)
@@ -38,6 +39,7 @@ class User(db.Model):
         return check_password_hash(self.password_hash, password)
 
 class Compra(db.Model):
+    # ... (nenhuma mudança aqui)
     __tablename__ = 'compras'
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(100), nullable=False)
@@ -47,7 +49,6 @@ class Compra(db.Model):
     categoria = db.Column(db.String(50))
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
 
-    # NOVO: Método para converter o objeto em um dicionário (JSON)
     def to_dict(self):
         return {
             'id': self.id,
@@ -111,52 +112,55 @@ def login():
 
 
 # --- ROTAS PROTEGIDAS ---
-
 @app.route('/processar_nota', methods=['POST'])
 @jwt_required()
 def processar_nota():
-    # ... (nenhuma mudança aqui)
-    current_user_id = get_jwt_identity()
-    print(f"Requisição recebida para o usuário ID: {current_user_id}")
-    link_nota = request.json.get('url')
-    if not link_nota:
-        return jsonify({'erro': 'URL da nota fiscal não fornecida.'}), 400
-    dados_extraidos = extrair_dados_nota_fiscal(link_nota)
-    if dados_extraidos:
-        return jsonify(dados_extraidos)
-    else:
-        return jsonify({'erro': 'Não foi possível processar a nota fiscal.'}), 500
+    # ...
+    return jsonify({"mensagem": "Rota de processar nota funcionando!"})
 
 @app.route('/processar_imagem', methods=['POST'])
 @jwt_required()
 def processar_imagem():
-    # ... (nenhuma mudança aqui)
-    current_user_id = get_jwt_identity()
-    print(f"Requisição de imagem recebida para o usuário ID: {current_user_id}")
-    if 'comprovante' not in request.files:
-        return jsonify({'erro': 'Nenhum arquivo de imagem enviado.'}), 400
-    arquivo_imagem = request.files['comprovante']
-    dados_extraidos = analisar_imagem_comprovante(arquivo_imagem)
-    if dados_extraidos:
-        return jsonify(dados_extraidos)
-    else:
-        return jsonify({'erro': 'Não foi possível analisar o comprovante.'}), 500
+    # ...
+    return jsonify({"mensagem": "Rota de processar imagem funcionando!"})
 
-# --- NOVAS ROTAS DE DADOS (CRUD) ---
+
+# --- ROTAS DE DADOS (CRUD) ---
 
 @app.route('/compras', methods=['GET'])
 @jwt_required()
 def get_compras():
-    # Pega o ID do usuário a partir do token (e converte para inteiro)
+    # ... (nenhuma mudança aqui)
     current_user_id = int(get_jwt_identity())
-    
-    # Busca no banco de dados todas as compras que pertencem a este usuário
     compras_do_usuario = Compra.query.filter_by(user_id=current_user_id).all()
-    
-    # Converte a lista de objetos 'Compra' em uma lista de dicionários/JSON
     resultado = [compra.to_dict() for compra in compras_do_usuario]
-    
     return jsonify(resultado), 200
+
+# NOVA ROTA PARA ADICIONAR COMPRAS
+@app.route('/compras', methods=['POST'])
+@jwt_required()
+def add_compra():
+    current_user_id = int(get_jwt_identity())
+    dados = request.get_json()
+
+    # Validação simples dos dados recebidos do app
+    if not dados or not all(k in dados for k in ['nome', 'quantidade', 'valor_unitario', 'data']):
+        return jsonify({'erro': 'Dados da compra estão incompletos.'}), 400
+
+    nova_compra = Compra(
+        nome=dados['nome'],
+        quantidade=dados['quantidade'],
+        valor_unitario=dados['valor_unitario'],
+        data=dados['data'],
+        categoria=dados.get('categoria'), # .get() para campos opcionais
+        user_id=current_user_id # Associando a compra ao usuário logado
+    )
+    
+    db.session.add(nova_compra)
+    db.session.commit()
+    
+    # Retorna os dados da compra recém-criada, incluindo o novo ID
+    return jsonify(nova_compra.to_dict()), 201
 
 
 if __name__ == '__main__':
