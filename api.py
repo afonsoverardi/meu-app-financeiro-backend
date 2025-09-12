@@ -6,18 +6,15 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, JWTManager
-
-# IMPORTANTE: Adicione as funções do seu arquivo de dados
 from dados import extrair_dados_nota_fiscal, analisar_imagem_comprovante
 
-# Carrega as variáveis de ambiente do arquivo .env
 load_dotenv()
 
 # --- Configuração Inicial ---
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY', 'super-secret-key-change-me')
+app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY')
 
 # --- Inicialização das Extensões ---
 db = SQLAlchemy(app)
@@ -30,8 +27,7 @@ class User(db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(120), unique=True, nullable=False)
-    password_hash = db.Column(db.String(256), nullable=False) # Já corrigido
-
+    password_hash = db.Column(db.String(256), nullable=False)
     compras = db.relationship('Compra', backref='user', lazy=True, cascade="all, delete-orphan")
     custos_fixos = db.relationship('CustoFixo', backref='user', lazy=True, cascade="all, delete-orphan")
 
@@ -51,7 +47,19 @@ class Compra(db.Model):
     categoria = db.Column(db.String(50))
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
 
+    # NOVO: Método para converter o objeto em um dicionário (JSON)
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'nome': self.nome,
+            'quantidade': self.quantidade,
+            'valorUnitario': self.valor_unitario,
+            'data': self.data,
+            'categoria': self.categoria
+        }
+
 class CustoFixo(db.Model):
+    # ... (nenhuma mudança aqui)
     __tablename__ = 'custos_fixos'
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(100), nullable=False)
@@ -64,13 +72,14 @@ class CustoFixo(db.Model):
 
 
 # --- Rotas de Autenticação ---
-
+# ... (nenhuma mudança aqui)
 @app.route('/')
 def health_check():
     return jsonify({"status": "healthy"}), 200
 
 @app.route('/register', methods=['POST'])
 def register():
+    # ...
     data = request.get_json()
     email = data.get('email')
     password = data.get('password')
@@ -90,6 +99,7 @@ def register():
 
 @app.route('/login', methods=['POST'])
 def login():
+    # ...
     data = request.get_json()
     email = data.get('email')
     password = data.get('password')
@@ -99,46 +109,54 @@ def login():
         return jsonify(access_token=access_token)
     return jsonify({"erro": "Credenciais inválidas"}), 401
 
+
 # --- ROTAS PROTEGIDAS ---
 
 @app.route('/processar_nota', methods=['POST'])
-@jwt_required() # <--- AQUI ESTÁ A TRANCA!
+@jwt_required()
 def processar_nota():
-    # Pega o ID do usuário a partir do token
+    # ... (nenhuma mudança aqui)
     current_user_id = get_jwt_identity()
     print(f"Requisição recebida para o usuário ID: {current_user_id}")
-
     link_nota = request.json.get('url')
     if not link_nota:
         return jsonify({'erro': 'URL da nota fiscal não fornecida.'}), 400
-
     dados_extraidos = extrair_dados_nota_fiscal(link_nota)
-
     if dados_extraidos:
-        # Futuramente, aqui salvaremos as compras associadas ao current_user_id
         return jsonify(dados_extraidos)
     else:
         return jsonify({'erro': 'Não foi possível processar a nota fiscal.'}), 500
 
-
 @app.route('/processar_imagem', methods=['POST'])
-@jwt_required() # <--- AQUI ESTÁ A TRANCA!
+@jwt_required()
 def processar_imagem():
-    # Pega o ID do usuário a partir do token
+    # ... (nenhuma mudança aqui)
     current_user_id = get_jwt_identity()
     print(f"Requisição de imagem recebida para o usuário ID: {current_user_id}")
-    
     if 'comprovante' not in request.files:
         return jsonify({'erro': 'Nenhum arquivo de imagem enviado.'}), 400
-    
     arquivo_imagem = request.files['comprovante']
     dados_extraidos = analisar_imagem_comprovante(arquivo_imagem)
-    
     if dados_extraidos:
-        # Futuramente, aqui salvaremos a compra associada ao current_user_id
         return jsonify(dados_extraidos)
     else:
         return jsonify({'erro': 'Não foi possível analisar o comprovante.'}), 500
+
+# --- NOVAS ROTAS DE DADOS (CRUD) ---
+
+@app.route('/compras', methods=['GET'])
+@jwt_required()
+def get_compras():
+    # Pega o ID do usuário a partir do token (e converte para inteiro)
+    current_user_id = int(get_jwt_identity())
+    
+    # Busca no banco de dados todas as compras que pertencem a este usuário
+    compras_do_usuario = Compra.query.filter_by(user_id=current_user_id).all()
+    
+    # Converte a lista de objetos 'Compra' em uma lista de dicionários/JSON
+    resultado = [compra.to_dict() for compra in compras_do_usuario]
+    
+    return jsonify(resultado), 200
 
 
 if __name__ == '__main__':
