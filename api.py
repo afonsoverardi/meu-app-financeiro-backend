@@ -21,7 +21,6 @@ migrate = Migrate(app, db)
 jwt = JWTManager(app)
 
 # --- Modelos do Banco de Dados ---
-# ... (Nenhuma mudança nos modelos)
 class User(db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
@@ -59,7 +58,18 @@ class CustoFixo(db.Model):
     dia_do_mes = db.Column(db.Integer, nullable=False)
     mes_de_inicio = db.Column(db.Integer, nullable=False, default=1)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-
+    
+    # NOVO: Método para converter para JSON
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'nome': self.nome,
+            'valor': self.valor,
+            'categoria': self.categoria,
+            'tipoRecorrencia': self.tipo_recorrencia,
+            'diaDoMes': self.dia_do_mes,
+            'mesDeInicio': self.mes_de_inicio
+        }
 
 # --- Rotas de Autenticação e Processamento ---
 @app.route('/')
@@ -95,8 +105,7 @@ def processar_nota(): return jsonify({"mensagem": "Rota de processar nota funcio
 def processar_imagem(): return jsonify({"mensagem": "Rota de processar imagem funcionando!"})
 
 
-# --- ROTAS DE DADOS (CRUD) ---
-
+# --- ROTAS DE DADOS (CRUD Compras) ---
 @app.route('/compras', methods=['GET'])
 @jwt_required()
 def get_compras():
@@ -113,13 +122,29 @@ def add_compra():
     if not dados or not all(k in dados for k in ['nome', 'quantidade', 'valor_unitario', 'data']):
         return jsonify({'erro': 'Dados da compra estão incompletos.'}), 400
     nova_compra = Compra(
-        nome=dados['nome'], quantidade=dados['quantidade'],
-        valor_unitario=dados['valor_unitario'], data=dados['data'],
-        categoria=dados.get('categoria'), user_id=current_user_id
+        nome=dados['nome'], quantidade=dados['quantidade'], valor_unitario=dados['valor_unitario'],
+        data=dados['data'], categoria=dados.get('categoria'), user_id=current_user_id
     )
     db.session.add(nova_compra)
     db.session.commit()
     return jsonify(nova_compra.to_dict()), 201
+
+@app.route('/compras/<int:compra_id>', methods=['PUT'])
+@jwt_required()
+def update_compra(compra_id):
+    current_user_id = int(get_jwt_identity())
+    compra_para_atualizar = Compra.query.get(compra_id)
+    if not compra_para_atualizar: return jsonify({'erro': 'Compra não encontrada'}), 404
+    if compra_para_atualizar.user_id != current_user_id: return jsonify({'erro': 'Acesso não autorizado'}), 403
+    dados = request.get_json()
+    if not dados: return jsonify({'erro': 'Nenhum dado fornecido'}), 400
+    compra_para_atualizar.nome = dados.get('nome', compra_para_atualizar.nome)
+    compra_para_atualizar.quantidade = dados.get('quantidade', compra_para_atualizar.quantidade)
+    compra_para_atualizar.valor_unitario = dados.get('valor_unitario', compra_para_atualizar.valor_unitario)
+    compra_para_atualizar.data = dados.get('data', compra_para_atualizar.data)
+    compra_para_atualizar.categoria = dados.get('categoria', compra_para_atualizar.categoria)
+    db.session.commit()
+    return jsonify(compra_para_atualizar.to_dict()), 200
 
 @app.route('/compras/<int:compra_id>', methods=['DELETE'])
 @jwt_required()
@@ -132,34 +157,38 @@ def delete_compra(compra_id):
     db.session.commit()
     return jsonify({'mensagem': 'Compra deletada com sucesso'}), 200
 
-# NOVA ROTA PARA ATUALIZAR COMPRAS
-@app.route('/compras/<int:compra_id>', methods=['PUT'])
+
+# --- NOVAS ROTAS DE CUSTOS FIXOS (CRUD) ---
+
+@app.route('/custos-fixos', methods=['GET'])
 @jwt_required()
-def update_compra(compra_id):
+def get_custos_fixos():
     current_user_id = int(get_jwt_identity())
-    
-    compra_para_atualizar = Compra.query.get(compra_id)
-    
-    if not compra_para_atualizar:
-        return jsonify({'erro': 'Compra não encontrada'}), 404
-    
-    if compra_para_atualizar.user_id != current_user_id:
-        return jsonify({'erro': 'Acesso não autorizado para editar esta compra'}), 403
-        
+    custos = CustoFixo.query.filter_by(user_id=current_user_id).order_by(CustoFixo.nome).all()
+    return jsonify([custo.to_dict() for custo in custos]), 200
+
+@app.route('/custos-fixos', methods=['POST'])
+@jwt_required()
+def add_custo_fixo():
+    current_user_id = int(get_jwt_identity())
     dados = request.get_json()
-    if not dados:
-        return jsonify({'erro': 'Nenhum dado fornecido para atualização'}), 400
-        
-    # Atualiza os campos do objeto com os novos dados recebidos
-    compra_para_atualizar.nome = dados.get('nome', compra_para_atualizar.nome)
-    compra_para_atualizar.quantidade = dados.get('quantidade', compra_para_atualizar.quantidade)
-    compra_para_atualizar.valor_unitario = dados.get('valor_unitario', compra_para_atualizar.valor_unitario)
-    compra_para_atualizar.data = dados.get('data', compra_para_atualizar.data)
-    compra_para_atualizar.categoria = dados.get('categoria', compra_para_atualizar.categoria)
     
+    required_keys = ['nome', 'valor', 'categoria', 'tipoRecorrencia', 'diaDoMes', 'mesDeInicio']
+    if not dados or not all(k in dados for k in required_keys):
+        return jsonify({'erro': 'Dados do custo fixo estão incompletos.'}), 400
+    
+    novo_custo = CustoFixo(
+        nome=dados['nome'],
+        valor=dados['valor'],
+        categoria=dados['categoria'],
+        tipoRecorrencia=dados['tipoRecorrencia'],
+        diaDoMes=dados['diaDoMes'],
+        mesDeInicio=dados['mesDeInicio'],
+        user_id=current_user_id
+    )
+    db.session.add(novo_custo)
     db.session.commit()
-    
-    return jsonify(compra_para_atualizar.to_dict()), 200
+    return jsonify(novo_custo.to_dict()), 201
 
 
 if __name__ == '__main__':
