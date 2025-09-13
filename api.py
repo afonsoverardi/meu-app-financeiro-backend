@@ -28,7 +28,6 @@ class User(db.Model):
     password_hash = db.Column(db.String(256), nullable=False)
     compras = db.relationship('Compra', backref='user', lazy=True, cascade="all, delete-orphan")
     custos_fixos = db.relationship('CustoFixo', backref='user', lazy=True, cascade="all, delete-orphan")
-
     def set_password(self, password): self.password_hash = generate_password_hash(password)
     def check_password(self, password): return check_password_hash(self.password_hash, password)
 
@@ -41,12 +40,8 @@ class Compra(db.Model):
     data = db.Column(db.String(10), nullable=False)
     categoria = db.Column(db.String(50))
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-
     def to_dict(self):
-        return {
-            'id': self.id, 'nome': self.nome, 'quantidade': self.quantidade,
-            'valorUnitario': self.valor_unitario, 'data': self.data, 'categoria': self.categoria
-        }
+        return {'id': self.id, 'nome': self.nome, 'quantidade': self.quantidade, 'valorUnitario': self.valor_unitario, 'data': self.data, 'categoria': self.categoria}
 
 class CustoFixo(db.Model):
     __tablename__ = 'custos_fixos'
@@ -58,18 +53,8 @@ class CustoFixo(db.Model):
     dia_do_mes = db.Column(db.Integer, nullable=False)
     mes_de_inicio = db.Column(db.Integer, nullable=False, default=1)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    
-    # NOVO: Método para converter para JSON
     def to_dict(self):
-        return {
-            'id': self.id,
-            'nome': self.nome,
-            'valor': self.valor,
-            'categoria': self.categoria,
-            'tipoRecorrencia': self.tipo_recorrencia,
-            'diaDoMes': self.dia_do_mes,
-            'mesDeInicio': self.mes_de_inicio
-        }
+        return {'id': self.id, 'nome': self.nome, 'valor': self.valor, 'categoria': self.categoria, 'tipoRecorrencia': self.tipo_recorrencia, 'diaDoMes': self.dia_do_mes, 'mesDeInicio': self.mes_de_inicio}
 
 # --- Rotas de Autenticação e Processamento ---
 @app.route('/')
@@ -104,27 +89,21 @@ def processar_nota(): return jsonify({"mensagem": "Rota de processar nota funcio
 @jwt_required()
 def processar_imagem(): return jsonify({"mensagem": "Rota de processar imagem funcionando!"})
 
-
 # --- ROTAS DE DADOS (CRUD Compras) ---
 @app.route('/compras', methods=['GET'])
 @jwt_required()
 def get_compras():
     current_user_id = int(get_jwt_identity())
     compras_do_usuario = Compra.query.filter_by(user_id=current_user_id).all()
-    resultado = [compra.to_dict() for compra in compras_do_usuario]
-    return jsonify(resultado), 200
+    return jsonify([compra.to_dict() for compra in compras_do_usuario]), 200
 
 @app.route('/compras', methods=['POST'])
 @jwt_required()
 def add_compra():
     current_user_id = int(get_jwt_identity())
     dados = request.get_json()
-    if not dados or not all(k in dados for k in ['nome', 'quantidade', 'valor_unitario', 'data']):
-        return jsonify({'erro': 'Dados da compra estão incompletos.'}), 400
-    nova_compra = Compra(
-        nome=dados['nome'], quantidade=dados['quantidade'], valor_unitario=dados['valor_unitario'],
-        data=dados['data'], categoria=dados.get('categoria'), user_id=current_user_id
-    )
+    if not dados or not all(k in dados for k in ['nome', 'quantidade', 'valor_unitario', 'data']): return jsonify({'erro': 'Dados da compra estão incompletos.'}), 400
+    nova_compra = Compra(nome=dados['nome'], quantidade=dados['quantidade'], valor_unitario=dados['valor_unitario'], data=dados['data'], categoria=dados.get('categoria'), user_id=current_user_id)
     db.session.add(nova_compra)
     db.session.commit()
     return jsonify(nova_compra.to_dict()), 201
@@ -157,9 +136,7 @@ def delete_compra(compra_id):
     db.session.commit()
     return jsonify({'mensagem': 'Compra deletada com sucesso'}), 200
 
-
-# --- NOVAS ROTAS DE CUSTOS FIXOS (CRUD) ---
-
+# --- ROTAS DE CUSTOS FIXOS (CRUD) ---
 @app.route('/custos-fixos', methods=['GET'])
 @jwt_required()
 def get_custos_fixos():
@@ -172,24 +149,24 @@ def get_custos_fixos():
 def add_custo_fixo():
     current_user_id = int(get_jwt_identity())
     dados = request.get_json()
-    
     required_keys = ['nome', 'valor', 'categoria', 'tipoRecorrencia', 'diaDoMes', 'mesDeInicio']
     if not dados or not all(k in dados for k in required_keys):
         return jsonify({'erro': 'Dados do custo fixo estão incompletos.'}), 400
     
+    # CORREÇÃO APLICADA AQUI:
+    # Mapeia os nomes do JSON (camelCase) para os nomes do modelo no banco (snake_case)
     novo_custo = CustoFixo(
+        user_id=current_user_id,
         nome=dados['nome'],
         valor=dados['valor'],
         categoria=dados['categoria'],
-        tipoRecorrencia=dados['tipoRecorrencia'],
-        diaDoMes=dados['diaDoMes'],
-        mesDeInicio=dados['mesDeInicio'],
-        user_id=current_user_id
+        tipo_recorrencia=dados['tipoRecorrencia'], # Correto: tipo_recorrencia
+        dia_do_mes=dados['diaDoMes'],             # Correto: dia_do_mes
+        mes_de_inicio=dados['mesDeInicio']        # Correto: mes_de_inicio
     )
     db.session.add(novo_custo)
     db.session.commit()
     return jsonify(novo_custo.to_dict()), 201
-
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=os.getenv('PORT', 5000))
