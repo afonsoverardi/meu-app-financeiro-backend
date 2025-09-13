@@ -7,21 +7,21 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, JWTManager
 from dados import extrair_dados_nota_fiscal, analisar_imagem_comprovante
+from datetime import datetime # NOVO: Importa o datetime para pegar a data atual
 
 load_dotenv()
 
-# --- Configuração Inicial e Extensões ---
+# --- Configuração e Modelos ---
+# ... (nenhuma mudança aqui, o código é o mesmo de antes)
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY')
-
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 jwt = JWTManager(app)
-
-# --- Modelos do Banco de Dados ---
 class User(db.Model):
+    #...
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(120), unique=True, nullable=False)
@@ -32,6 +32,7 @@ class User(db.Model):
     def check_password(self, password): return check_password_hash(self.password_hash, password)
 
 class Compra(db.Model):
+    #...
     __tablename__ = 'compras'
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(100), nullable=False)
@@ -44,6 +45,7 @@ class Compra(db.Model):
         return {'id': self.id, 'nome': self.nome, 'quantidade': self.quantidade, 'valorUnitario': self.valor_unitario, 'data': self.data, 'categoria': self.categoria}
 
 class CustoFixo(db.Model):
+    #...
     __tablename__ = 'custos_fixos'
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(100), nullable=False)
@@ -57,6 +59,7 @@ class CustoFixo(db.Model):
         return {'id': self.id, 'nome': self.nome, 'valor': self.valor, 'categoria': self.categoria, 'tipoRecorrencia': self.tipo_recorrencia, 'diaDoMes': self.dia_do_mes, 'mesDeInicio': self.mes_de_inicio}
 
 # --- Rotas de Autenticação e Processamento ---
+# ... (nenhuma mudança aqui)
 @app.route('/')
 def health_check(): return jsonify({"status": "healthy"}), 200
 @app.route('/register', methods=['POST'])
@@ -80,7 +83,7 @@ def login():
         access_token = create_access_token(identity=str(user.id))
         return jsonify(access_token=access_token)
     return jsonify({"erro": "Credenciais inválidas"}), 401
-
+# ... rotas de processamento ...
 @app.route('/processar_nota', methods=['POST'])
 @jwt_required()
 def processar_nota(): return jsonify({"mensagem": "Rota de processar nota funcionando!"})
@@ -89,17 +92,70 @@ def processar_nota(): return jsonify({"mensagem": "Rota de processar nota funcio
 @jwt_required()
 def processar_imagem(): return jsonify({"mensagem": "Rota de processar imagem funcionando!"})
 
+
 # --- ROTAS DE DADOS (CRUD Compras) ---
+
+# MODIFICADO: Rota de compras agora projeta os custos fixos
 @app.route('/compras', methods=['GET'])
 @jwt_required()
 def get_compras():
     current_user_id = int(get_jwt_identity())
-    compras_do_usuario = Compra.query.filter_by(user_id=current_user_id).all()
-    return jsonify([compra.to_dict() for compra in compras_do_usuario]), 200
+    
+    # Pega o mês e ano da query string (ex: /compras?mes=9&ano=2025)
+    # Se não forem fornecidos, usa o mês e ano atuais.
+    mes_query = request.args.get('mes', default=datetime.now().month, type=int)
+    ano_query = request.args.get('ano', default=datetime.now().year, type=int)
 
+    # 1. Busca as compras variáveis do mês/ano
+    mes_ano_str = f"{mes_query:02d}/{ano_query}"
+    compras_variaveis = Compra.query.filter(
+        Compra.user_id == current_user_id,
+        Compra.data.like(f"%/{mes_ano_str}")
+    ).all()
+    
+    # 2. Busca todos os custos fixos do usuário
+    custos_fixos_todos = CustoFixo.query.filter_by(user_id=current_user_id).all()
+    
+    # 3. Projeta os custos fixos que vencem no mês/ano solicitado
+    compras_de_custos_fixos = []
+    for custo in custos_fixos_todos:
+        adicionar = False
+        mes_base = custo.mes_de_inicio
+        
+        if custo.tipo_recorrencia == 'mensal':
+            adicionar = True
+        elif custo.tipo_recorrencia == 'bimestral':
+            if (mes_query - mes_base) >= 0 and (mes_query - mes_base) % 2 == 0: adicionar = True
+        elif custo.tipo_recorrencia == 'trimestral':
+            if (mes_query - mes_base) >= 0 and (mes_query - mes_base) % 3 == 0: adicionar = True
+        elif custo.tipo_recorrencia == 'semestral':
+            if (mes_query - mes_base) >= 0 and (mes_query - mes_base) % 6 == 0: adicionar = True
+        elif custo.tipo_recorrencia == 'anual':
+            if mes_query == mes_base: adicionar = True
+
+        if adicionar:
+            # Cria um dicionário no formato de 'Compra' para o custo fixo
+            compra_projetada = {
+                'id': -custo.id, # ID negativo para diferenciar no app
+                'nome': f"{custo.nome} (Fixo)",
+                'quantidade': 1,
+                'valorUnitario': custo.valor,
+                'data': f"{custo.dia_do_mes:02d}/{mes_query:02d}/{ano_query}",
+                'categoria': custo.categoria
+            }
+            compras_de_custos_fixos.append(compra_projetada)
+
+    # 4. Combina as compras variáveis com as projeções de custos fixos
+    resultado_variaveis = [compra.to_dict() for compra in compras_variaveis]
+    resultado_final = resultado_variaveis + compras_de_custos_fixos
+    
+    return jsonify(resultado_final), 200
+
+# ... (restante das rotas de compras e custos fixos sem mudanças) ...
 @app.route('/compras', methods=['POST'])
 @jwt_required()
 def add_compra():
+    #...
     current_user_id = int(get_jwt_identity())
     dados = request.get_json()
     if not dados or not all(k in dados for k in ['nome', 'quantidade', 'valor_unitario', 'data']): return jsonify({'erro': 'Dados da compra estão incompletos.'}), 400
@@ -111,6 +167,7 @@ def add_compra():
 @app.route('/compras/<int:compra_id>', methods=['PUT'])
 @jwt_required()
 def update_compra(compra_id):
+    #...
     current_user_id = int(get_jwt_identity())
     compra_para_atualizar = Compra.query.get(compra_id)
     if not compra_para_atualizar: return jsonify({'erro': 'Compra não encontrada'}), 404
@@ -128,6 +185,7 @@ def update_compra(compra_id):
 @app.route('/compras/<int:compra_id>', methods=['DELETE'])
 @jwt_required()
 def delete_compra(compra_id):
+    #...
     current_user_id = int(get_jwt_identity())
     compra_para_deletar = Compra.query.get(compra_id)
     if not compra_para_deletar: return jsonify({'erro': 'Compra não encontrada'}), 404
@@ -136,10 +194,10 @@ def delete_compra(compra_id):
     db.session.commit()
     return jsonify({'mensagem': 'Compra deletada com sucesso'}), 200
 
-# --- ROTAS DE CUSTOS FIXOS (CRUD) ---
 @app.route('/custos-fixos', methods=['GET'])
 @jwt_required()
 def get_custos_fixos():
+    #...
     current_user_id = int(get_jwt_identity())
     custos = CustoFixo.query.filter_by(user_id=current_user_id).order_by(CustoFixo.nome).all()
     return jsonify([custo.to_dict() for custo in custos]), 200
@@ -147,23 +205,12 @@ def get_custos_fixos():
 @app.route('/custos-fixos', methods=['POST'])
 @jwt_required()
 def add_custo_fixo():
+    #...
     current_user_id = int(get_jwt_identity())
     dados = request.get_json()
     required_keys = ['nome', 'valor', 'categoria', 'tipoRecorrencia', 'diaDoMes', 'mesDeInicio']
-    if not dados or not all(k in dados for k in required_keys):
-        return jsonify({'erro': 'Dados do custo fixo estão incompletos.'}), 400
-    
-    # CORREÇÃO APLICADA AQUI:
-    # Mapeia os nomes do JSON (camelCase) para os nomes do modelo no banco (snake_case)
-    novo_custo = CustoFixo(
-        user_id=current_user_id,
-        nome=dados['nome'],
-        valor=dados['valor'],
-        categoria=dados['categoria'],
-        tipo_recorrencia=dados['tipoRecorrencia'], # Correto: tipo_recorrencia
-        dia_do_mes=dados['diaDoMes'],             # Correto: dia_do_mes
-        mes_de_inicio=dados['mesDeInicio']        # Correto: mes_de_inicio
-    )
+    if not dados or not all(k in dados for k in required_keys): return jsonify({'erro': 'Dados do custo fixo estão incompletos.'}), 400
+    novo_custo = CustoFixo(user_id=current_user_id, nome=dados['nome'], valor=dados['valor'], categoria=dados['categoria'], tipo_recorrencia=dados['tipoRecorrencia'], dia_do_mes=dados['diaDoMes'], mes_de_inicio=dados['mesDeInicio'])
     db.session.add(novo_custo)
     db.session.commit()
     return jsonify(novo_custo.to_dict()), 201
