@@ -11,17 +11,15 @@ from datetime import datetime
 
 load_dotenv()
 
-# --- Configuração Inicial e Extensões ---
+# --- Configuração e Modelos ---
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY')
-
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 jwt = JWTManager(app)
 
-# --- Modelos do Banco de Dados ---
 class User(db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
@@ -69,68 +67,37 @@ class Categoria(db.Model):
     def to_dict(self):
         return {'id': self.id, 'nome': self.nome, 'pictogram': self.pictogram, 'parentId': self.parent_id}
 
-# --- Rotas de Autenticação ---
+# --- Rotas de Autenticação e Processamento ---
 @app.route('/')
-def health_check():
-    return jsonify({"status": "healthy"}), 200
-
+def health_check(): return jsonify({"status": "healthy"}), 200
 @app.route('/register', methods=['POST'])
 def register():
     data = request.get_json()
-    email = data.get('email')
-    password = data.get('password')
-
-    if not email or not password:
-        return jsonify({"erro": "Email e senha são obrigatórios"}), 400
-
-    if User.query.filter_by(email=email).first():
-        return jsonify({"erro": "Este email já está em uso"}), 409
-
-    # Cria e salva o novo usuário
+    email, password = data.get('email'), data.get('password')
+    if not email or not password: return jsonify({"erro": "Email e senha são obrigatórios"}), 400
+    if User.query.filter_by(email=email).first(): return jsonify({"erro": "Este email já está em uso"}), 409
     new_user = User(email=email)
     new_user.set_password(password)
     db.session.add(new_user)
-    db.session.commit() # Commit para que o new_user.id seja gerado pelo banco
-
-    # --- NOVO: Popula as categorias padrão para o novo usuário ---
-    # (Ícones baseados nos 'codePoint' do Material Icons do Flutter, copiados do seu database_helper.dart)
+    db.session.commit()
     categorias_padrao = [
-        {'nome': 'Alimentação', 'pictogram': 0xe25a},
-        {'nome': 'Assinaturas e serviços', 'pictogram': 0xe638},
-        {'nome': 'Bares e restaurantes', 'pictogram': 0xe37a},
-        {'nome': 'Carro', 'pictogram': 0xe1d7},
-        {'nome': 'Casa', 'pictogram': 0xe318},
-        {'nome': 'Compras', 'pictogram': 0xe59c},
-        {'nome': 'Cuidados pessoais', 'pictogram': 0xeaae},
-        {'nome': 'Dívidas e empréstimos', 'pictogram': 0xe424},
-        {'nome': 'Educação', 'pictogram': 0xea3c},
-        {'nome': 'Família e filhos', 'pictogram': 0xe23a},
-        {'nome': 'Impostos e Taxas', 'pictogram': 0xe03f},
-        {'nome': 'Investimentos', 'pictogram': 0xe67d},
-        {'nome': 'Lazer e hobbies', 'pictogram': 0xe13d},
-        {'nome': 'Mercado', 'pictogram': 0xe59c},
-        {'nome': 'Outros', 'pictogram': 0xe148},
-        {'nome': 'Pets', 'pictogram': 0xe4a1},
-        {'nome': 'Presentes e doações', 'pictogram': 0xe503},
-        {'nome': 'Roupas', 'pictogram': 0xe15f},
-        {'nome': 'Saúde', 'pictogram': 0xe38e},
-        {'nome': 'Trabalho', 'pictogram': 0xe6e9},
-        {'nome': 'Transporte', 'pictogram': 0xe1d5},
-        {'nome': 'Viagem', 'pictogram': 0xe071},
+        {'nome': 'Alimentação', 'pictogram': 0xe25a}, {'nome': 'Assinaturas e serviços', 'pictogram': 0xe638},
+        {'nome': 'Bares e restaurantes', 'pictogram': 0xe37a}, {'nome': 'Carro', 'pictogram': 0xe1d7},
+        {'nome': 'Casa', 'pictogram': 0xe318}, {'nome': 'Compras', 'pictogram': 0xe59c},
+        {'nome': 'Cuidados pessoais', 'pictogram': 0xeaae}, {'nome': 'Dívidas e empréstimos', 'pictogram': 0xe424},
+        {'nome': 'Educação', 'pictogram': 0xea3c}, {'nome': 'Família e filhos', 'pictogram': 0xe23a},
+        {'nome': 'Impostos e Taxas', 'pictogram': 0xe03f}, {'nome': 'Investimentos', 'pictogram': 0xe67d},
+        {'nome': 'Lazer e hobbies', 'pictogram': 0xe13d}, {'nome': 'Mercado', 'pictogram': 0xe59c},
+        {'nome': 'Outros', 'pictogram': 0xe148}, {'nome': 'Pets', 'pictogram': 0xe4a1},
+        {'nome': 'Presentes e doações', 'pictogram': 0xe503}, {'nome': 'Roupas', 'pictogram': 0xe15f},
+        {'nome': 'Saúde', 'pictogram': 0xe38e}, {'nome': 'Trabalho', 'pictogram': 0xe6e9},
+        {'nome': 'Transporte', 'pictogram': 0xe1d5}, {'nome': 'Viagem', 'pictogram': 0xe071},
     ]
-
     for cat_data in categorias_padrao:
-        nova_cat = Categoria(
-            nome=cat_data['nome'],
-            pictogram=cat_data['pictogram'],
-            user_id=new_user.id # Associa a categoria ao novo usuário
-        )
+        nova_cat = Categoria(nome=cat_data['nome'], pictogram=cat_data['pictogram'], user_id=new_user.id)
         db.session.add(nova_cat)
-
-    db.session.commit() # Salva todas as novas categorias no banco de uma vez
-
+    db.session.commit()
     return jsonify({"mensagem": "Usuário criado com sucesso!"}), 201
-
 @app.route('/login', methods=['POST'])
 def login():
     data = request.get_json()
@@ -140,17 +107,12 @@ def login():
         access_token = create_access_token(identity=str(user.id))
         return jsonify(access_token=access_token)
     return jsonify({"erro": "Credenciais inválidas"}), 401
-
-
-# --- ROTAS PROTEGIDAS ---
 @app.route('/processar_nota', methods=['POST'])
 @jwt_required()
 def processar_nota(): return jsonify({"mensagem": "Rota de processar nota funcionando!"})
-
 @app.route('/processar_imagem', methods=['POST'])
 @jwt_required()
 def processar_imagem(): return jsonify({"mensagem": "Rota de processar imagem funcionando!"})
-
 
 # --- ROTAS DE DADOS (CRUD Compras) ---
 @app.route('/compras', methods=['GET'])
@@ -217,7 +179,6 @@ def delete_compra(compra_id):
     db.session.delete(compra_para_deletar)
     db.session.commit()
     return jsonify({'mensagem': 'Compra deletada com sucesso'}), 200
-
 # --- ROTAS DE CUSTOS FIXOS (CRUD) ---
 @app.route('/custos-fixos', methods=['GET'])
 @jwt_required()
@@ -305,6 +266,48 @@ def delete_categoria(categoria_id):
     db.session.delete(cat)
     db.session.commit()
     return jsonify({'mensagem': 'Categoria deletada com sucesso'}), 200
+
+# --- NOVA ROTA DE RELATÓRIOS ---
+@app.route('/relatorios/gastos-por-categoria', methods=['GET'])
+@jwt_required()
+def get_gastos_por_categoria():
+    current_user_id = int(get_jwt_identity())
+    
+    mes_query = request.args.get('mes', default=datetime.now().month, type=int)
+    ano_query = request.args.get('ano', default=datetime.now().year, type=int)
+
+    mes_ano_str = f"{mes_query:02d}/{ano_query}"
+    compras_variaveis = Compra.query.filter(
+        Compra.user_id == current_user_id,
+        Compra.data.like(f"%/{mes_ano_str}")
+    ).all()
+    
+    custos_fixos_todos = CustoFixo.query.filter_by(user_id=current_user_id).all()
+    gastos_totais = {}
+
+    for compra in compras_variaveis:
+        categoria = compra.categoria if compra.categoria else 'Não Categorizado'
+        valor = compra.quantidade * compra.valor_unitario
+        gastos_totais[categoria] = gastos_totais.get(categoria, 0) + valor
+
+    for custo in custos_fixos_todos:
+        adicionar = False
+        mes_base = custo.mes_de_inicio
+        if custo.tipo_recorrencia == 'mensal': adicionar = True
+        elif custo.tipo_recorrencia == 'bimestral':
+            if (mes_query - mes_base) >= 0 and (mes_query - mes_base) % 2 == 0: adicionar = True
+        elif custo.tipo_recorrencia == 'trimestral':
+            if (mes_query - mes_base) >= 0 and (mes_query - mes_base) % 3 == 0: adicionar = True
+        elif custo.tipo_recorrencia == 'semestral':
+            if (mes_query - mes_base) >= 0 and (mes_query - mes_base) % 6 == 0: adicionar = True
+        elif custo.tipo_recorrencia == 'anual':
+            if mes_query == mes_base: adicionar = True
+        
+        if adicionar:
+            categoria = custo.categoria if custo.categoria else 'Não Categorizado'
+            gastos_totais[categoria] = gastos_totais.get(categoria, 0) + custo.valor
+            
+    return jsonify(gastos_totais), 200
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=os.getenv('PORT', 5000))
