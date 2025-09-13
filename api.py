@@ -27,10 +27,13 @@ class User(db.Model):
     password_hash = db.Column(db.String(256), nullable=False)
     compras = db.relationship('Compra', backref='user', lazy=True, cascade="all, delete-orphan")
     custos_fixos = db.relationship('CustoFixo', backref='user', lazy=True, cascade="all, delete-orphan")
+    # NOVO: Relacionamento com Categorias
+    categorias = db.relationship('Categoria', backref='user', lazy=True, cascade="all, delete-orphan")
     def set_password(self, password): self.password_hash = generate_password_hash(password)
     def check_password(self, password): return check_password_hash(self.password_hash, password)
 
 class Compra(db.Model):
+    #... (sem mudanças)
     __tablename__ = 'compras'
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(100), nullable=False)
@@ -43,6 +46,7 @@ class Compra(db.Model):
         return {'id': self.id, 'nome': self.nome, 'quantidade': self.quantidade, 'valorUnitario': self.valor_unitario, 'data': self.data, 'categoria': self.categoria}
 
 class CustoFixo(db.Model):
+    #... (sem mudanças)
     __tablename__ = 'custos_fixos'
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(100), nullable=False)
@@ -55,11 +59,31 @@ class CustoFixo(db.Model):
     def to_dict(self):
         return {'id': self.id, 'nome': self.nome, 'valor': self.valor, 'categoria': self.categoria, 'tipoRecorrencia': self.tipo_recorrencia, 'diaDoMes': self.dia_do_mes, 'mesDeInicio': self.mes_de_inicio}
 
-# --- Rotas de Autenticação e Processamento ---
+# NOVO: Modelo para Categorias
+class Categoria(db.Model):
+    __tablename__ = 'categorias'
+    id = db.Column(db.Integer, primary_key=True)
+    nome = db.Column(db.String(100), nullable=False)
+    pictogram = db.Column(db.Integer, nullable=False)
+    parent_id = db.Column(db.Integer, db.ForeignKey('categorias.id'), nullable=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    subcategorias = db.relationship('Categoria', backref=db.backref('parent', remote_side=[id]), cascade="all, delete-orphan")
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'nome': self.nome,
+            'pictogram': self.pictogram,
+            'parentId': self.parent_id
+        }
+
+# --- Rotas de Autenticação, Processamento, Compras e Custos Fixos ---
+# ... (Nenhuma mudança em todas as rotas anteriores)
 @app.route('/')
 def health_check(): return jsonify({"status": "healthy"}), 200
 @app.route('/register', methods=['POST'])
 def register():
+    #...
     data = request.get_json()
     email, password = data.get('email'), data.get('password')
     if not email or not password: return jsonify({"erro": "Email e senha são obrigatórios"}), 400
@@ -69,9 +93,9 @@ def register():
     db.session.add(new_user)
     db.session.commit()
     return jsonify({"mensagem": "Usuário criado com sucesso!"}), 201
-
 @app.route('/login', methods=['POST'])
 def login():
+    #...
     data = request.get_json()
     email, password = data.get('email'), data.get('password')
     user = User.query.filter_by(email=email).first()
@@ -85,11 +109,10 @@ def processar_nota(): return jsonify({"mensagem": "Rota de processar nota funcio
 @app.route('/processar_imagem', methods=['POST'])
 @jwt_required()
 def processar_imagem(): return jsonify({"mensagem": "Rota de processar imagem funcionando!"})
-
-# --- ROTAS DE DADOS (CRUD Compras) ---
 @app.route('/compras', methods=['GET'])
 @jwt_required()
 def get_compras():
+    #...
     current_user_id = int(get_jwt_identity())
     mes_query = request.args.get('mes', default=datetime.now().month, type=int)
     ano_query = request.args.get('ano', default=datetime.now().year, type=int)
@@ -118,6 +141,7 @@ def get_compras():
 @app.route('/compras', methods=['POST'])
 @jwt_required()
 def add_compra():
+    #...
     current_user_id = int(get_jwt_identity())
     dados = request.get_json()
     if not dados or not all(k in dados for k in ['nome', 'quantidade', 'valor_unitario', 'data']): return jsonify({'erro': 'Dados da compra estão incompletos.'}), 400
@@ -128,6 +152,7 @@ def add_compra():
 @app.route('/compras/<int:compra_id>', methods=['PUT'])
 @jwt_required()
 def update_compra(compra_id):
+    #...
     current_user_id = int(get_jwt_identity())
     compra_para_atualizar = Compra.query.get(compra_id)
     if not compra_para_atualizar: return jsonify({'erro': 'Compra não encontrada'}), 404
@@ -144,6 +169,7 @@ def update_compra(compra_id):
 @app.route('/compras/<int:compra_id>', methods=['DELETE'])
 @jwt_required()
 def delete_compra(compra_id):
+    #...
     current_user_id = int(get_jwt_identity())
     compra_para_deletar = Compra.query.get(compra_id)
     if not compra_para_deletar: return jsonify({'erro': 'Compra não encontrada'}), 404
@@ -151,18 +177,17 @@ def delete_compra(compra_id):
     db.session.delete(compra_para_deletar)
     db.session.commit()
     return jsonify({'mensagem': 'Compra deletada com sucesso'}), 200
-
-# --- ROTAS DE CUSTOS FIXOS (CRUD) ---
 @app.route('/custos-fixos', methods=['GET'])
 @jwt_required()
 def get_custos_fixos():
+    #...
     current_user_id = int(get_jwt_identity())
     custos = CustoFixo.query.filter_by(user_id=current_user_id).order_by(CustoFixo.nome).all()
     return jsonify([custo.to_dict() for custo in custos]), 200
-
 @app.route('/custos-fixos', methods=['POST'])
 @jwt_required()
 def add_custo_fixo():
+    #...
     current_user_id = int(get_jwt_identity())
     dados = request.get_json()
     required_keys = ['nome', 'valor', 'categoria', 'tipoRecorrencia', 'diaDoMes', 'mesDeInicio']
@@ -171,41 +196,92 @@ def add_custo_fixo():
     db.session.add(novo_custo)
     db.session.commit()
     return jsonify(novo_custo.to_dict()), 201
-
-# NOVA ROTA PARA ATUALIZAR CUSTOS FIXOS
 @app.route('/custos-fixos/<int:custo_id>', methods=['PUT'])
 @jwt_required()
 def update_custo_fixo(custo_id):
+    #...
     current_user_id = int(get_jwt_identity())
     custo_para_atualizar = CustoFixo.query.get(custo_id)
     if not custo_para_atualizar: return jsonify({'erro': 'Custo fixo não encontrado'}), 404
     if custo_para_atualizar.user_id != current_user_id: return jsonify({'erro': 'Acesso não autorizado'}), 403
-    
     dados = request.get_json()
     if not dados: return jsonify({'erro': 'Nenhum dado fornecido'}), 400
-
     custo_para_atualizar.nome = dados.get('nome', custo_para_atualizar.nome)
     custo_para_atualizar.valor = dados.get('valor', custo_para_atualizar.valor)
     custo_para_atualizar.categoria = dados.get('categoria', custo_para_atualizar.categoria)
     custo_para_atualizar.tipo_recorrencia = dados.get('tipoRecorrencia', custo_para_atualizar.tipo_recorrencia)
     custo_para_atualizar.dia_do_mes = dados.get('diaDoMes', custo_para_atualizar.dia_do_mes)
     custo_para_atualizar.mes_de_inicio = dados.get('mesDeInicio', custo_para_atualizar.mes_de_inicio)
-    
     db.session.commit()
     return jsonify(custo_para_atualizar.to_dict()), 200
-
-# NOVA ROTA PARA DELETAR CUSTOS FIXOS
 @app.route('/custos-fixos/<int:custo_id>', methods=['DELETE'])
 @jwt_required()
 def delete_custo_fixo(custo_id):
+    #...
     current_user_id = int(get_jwt_identity())
     custo_para_deletar = CustoFixo.query.get(custo_id)
     if not custo_para_deletar: return jsonify({'erro': 'Custo fixo não encontrado'}), 404
     if custo_para_deletar.user_id != current_user_id: return jsonify({'erro': 'Acesso não autorizado'}), 403
-    
     db.session.delete(custo_para_deletar)
     db.session.commit()
     return jsonify({'mensagem': 'Custo fixo deletado com sucesso'}), 200
+
+# --- NOVAS ROTAS DE CATEGORIAS (CRUD) ---
+
+@app.route('/categorias', methods=['GET'])
+@jwt_required()
+def get_categorias():
+    current_user_id = int(get_jwt_identity())
+    categorias = Categoria.query.filter_by(user_id=current_user_id).order_by(Categoria.nome).all()
+    return jsonify([c.to_dict() for c in categorias]), 200
+
+@app.route('/categorias', methods=['POST'])
+@jwt_required()
+def add_categoria():
+    current_user_id = int(get_jwt_identity())
+    dados = request.get_json()
+    if not dados or not 'nome' in dados or not 'pictogram' in dados:
+        return jsonify({'erro': 'Dados da categoria estão incompletos.'}), 400
+    
+    nova_categoria = Categoria(
+        nome=dados['nome'],
+        pictogram=dados['pictogram'],
+        parent_id=dados.get('parentId'),
+        user_id=current_user_id
+    )
+    db.session.add(nova_categoria)
+    db.session.commit()
+    return jsonify(nova_categoria.to_dict()), 201
+
+@app.route('/categorias/<int:categoria_id>', methods=['PUT'])
+@jwt_required()
+def update_categoria(categoria_id):
+    current_user_id = int(get_jwt_identity())
+    cat = Categoria.query.get(categoria_id)
+    if not cat: return jsonify({'erro': 'Categoria não encontrada'}), 404
+    if cat.user_id != current_user_id: return jsonify({'erro': 'Acesso não autorizado'}), 403
+    
+    dados = request.get_json()
+    if not dados: return jsonify({'erro': 'Nenhum dado fornecido'}), 400
+
+    cat.nome = dados.get('nome', cat.nome)
+    cat.pictogram = dados.get('pictogram', cat.pictogram)
+    # parent_id não é tipicamente editado, mas pode ser adicionado se necessário
+    
+    db.session.commit()
+    return jsonify(cat.to_dict()), 200
+
+@app.route('/categorias/<int:categoria_id>', methods=['DELETE'])
+@jwt_required()
+def delete_categoria(categoria_id):
+    current_user_id = int(get_jwt_identity())
+    cat = Categoria.query.get(categoria_id)
+    if not cat: return jsonify({'erro': 'Categoria não encontrada'}), 404
+    if cat.user_id != current_user_id: return jsonify({'erro': 'Acesso não autorizado'}), 403
+    
+    db.session.delete(cat)
+    db.session.commit()
+    return jsonify({'mensagem': 'Categoria deletada com sucesso'}), 200
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=os.getenv('PORT', 5000))
