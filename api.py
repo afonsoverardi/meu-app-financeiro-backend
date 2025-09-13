@@ -11,15 +11,17 @@ from datetime import datetime
 
 load_dotenv()
 
-# --- Configuração e Modelos ---
+# --- Configuração Inicial e Extensões ---
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY')
+
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 jwt = JWTManager(app)
 
+# --- Modelos do Banco de Dados ---
 class User(db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
@@ -27,13 +29,11 @@ class User(db.Model):
     password_hash = db.Column(db.String(256), nullable=False)
     compras = db.relationship('Compra', backref='user', lazy=True, cascade="all, delete-orphan")
     custos_fixos = db.relationship('CustoFixo', backref='user', lazy=True, cascade="all, delete-orphan")
-    # NOVO: Relacionamento com Categorias
     categorias = db.relationship('Categoria', backref='user', lazy=True, cascade="all, delete-orphan")
     def set_password(self, password): self.password_hash = generate_password_hash(password)
     def check_password(self, password): return check_password_hash(self.password_hash, password)
 
 class Compra(db.Model):
-    #... (sem mudanças)
     __tablename__ = 'compras'
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(100), nullable=False)
@@ -46,7 +46,6 @@ class Compra(db.Model):
         return {'id': self.id, 'nome': self.nome, 'quantidade': self.quantidade, 'valorUnitario': self.valor_unitario, 'data': self.data, 'categoria': self.categoria}
 
 class CustoFixo(db.Model):
-    #... (sem mudanças)
     __tablename__ = 'custos_fixos'
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(100), nullable=False)
@@ -59,7 +58,6 @@ class CustoFixo(db.Model):
     def to_dict(self):
         return {'id': self.id, 'nome': self.nome, 'valor': self.valor, 'categoria': self.categoria, 'tipoRecorrencia': self.tipo_recorrencia, 'diaDoMes': self.dia_do_mes, 'mesDeInicio': self.mes_de_inicio}
 
-# NOVO: Modelo para Categorias
 class Categoria(db.Model):
     __tablename__ = 'categorias'
     id = db.Column(db.Integer, primary_key=True)
@@ -68,34 +66,73 @@ class Categoria(db.Model):
     parent_id = db.Column(db.Integer, db.ForeignKey('categorias.id'), nullable=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     subcategorias = db.relationship('Categoria', backref=db.backref('parent', remote_side=[id]), cascade="all, delete-orphan")
-
     def to_dict(self):
-        return {
-            'id': self.id,
-            'nome': self.nome,
-            'pictogram': self.pictogram,
-            'parentId': self.parent_id
-        }
+        return {'id': self.id, 'nome': self.nome, 'pictogram': self.pictogram, 'parentId': self.parent_id}
 
-# --- Rotas de Autenticação, Processamento, Compras e Custos Fixos ---
-# ... (Nenhuma mudança em todas as rotas anteriores)
+# --- Rotas de Autenticação ---
 @app.route('/')
-def health_check(): return jsonify({"status": "healthy"}), 200
+def health_check():
+    return jsonify({"status": "healthy"}), 200
+
 @app.route('/register', methods=['POST'])
 def register():
-    #...
     data = request.get_json()
-    email, password = data.get('email'), data.get('password')
-    if not email or not password: return jsonify({"erro": "Email e senha são obrigatórios"}), 400
-    if User.query.filter_by(email=email).first(): return jsonify({"erro": "Este email já está em uso"}), 409
+    email = data.get('email')
+    password = data.get('password')
+
+    if not email or not password:
+        return jsonify({"erro": "Email e senha são obrigatórios"}), 400
+
+    if User.query.filter_by(email=email).first():
+        return jsonify({"erro": "Este email já está em uso"}), 409
+
+    # Cria e salva o novo usuário
     new_user = User(email=email)
     new_user.set_password(password)
     db.session.add(new_user)
-    db.session.commit()
+    db.session.commit() # Commit para que o new_user.id seja gerado pelo banco
+
+    # --- NOVO: Popula as categorias padrão para o novo usuário ---
+    # (Ícones baseados nos 'codePoint' do Material Icons do Flutter, copiados do seu database_helper.dart)
+    categorias_padrao = [
+        {'nome': 'Alimentação', 'pictogram': 0xe25a},
+        {'nome': 'Assinaturas e serviços', 'pictogram': 0xe638},
+        {'nome': 'Bares e restaurantes', 'pictogram': 0xe37a},
+        {'nome': 'Carro', 'pictogram': 0xe1d7},
+        {'nome': 'Casa', 'pictogram': 0xe318},
+        {'nome': 'Compras', 'pictogram': 0xe59c},
+        {'nome': 'Cuidados pessoais', 'pictogram': 0xeaae},
+        {'nome': 'Dívidas e empréstimos', 'pictogram': 0xe424},
+        {'nome': 'Educação', 'pictogram': 0xea3c},
+        {'nome': 'Família e filhos', 'pictogram': 0xe23a},
+        {'nome': 'Impostos e Taxas', 'pictogram': 0xe03f},
+        {'nome': 'Investimentos', 'pictogram': 0xe67d},
+        {'nome': 'Lazer e hobbies', 'pictogram': 0xe13d},
+        {'nome': 'Mercado', 'pictogram': 0xe59c},
+        {'nome': 'Outros', 'pictogram': 0xe148},
+        {'nome': 'Pets', 'pictogram': 0xe4a1},
+        {'nome': 'Presentes e doações', 'pictogram': 0xe503},
+        {'nome': 'Roupas', 'pictogram': 0xe15f},
+        {'nome': 'Saúde', 'pictogram': 0xe38e},
+        {'nome': 'Trabalho', 'pictogram': 0xe6e9},
+        {'nome': 'Transporte', 'pictogram': 0xe1d5},
+        {'nome': 'Viagem', 'pictogram': 0xe071},
+    ]
+
+    for cat_data in categorias_padrao:
+        nova_cat = Categoria(
+            nome=cat_data['nome'],
+            pictogram=cat_data['pictogram'],
+            user_id=new_user.id # Associa a categoria ao novo usuário
+        )
+        db.session.add(nova_cat)
+
+    db.session.commit() # Salva todas as novas categorias no banco de uma vez
+
     return jsonify({"mensagem": "Usuário criado com sucesso!"}), 201
+
 @app.route('/login', methods=['POST'])
 def login():
-    #...
     data = request.get_json()
     email, password = data.get('email'), data.get('password')
     user = User.query.filter_by(email=email).first()
@@ -103,16 +140,22 @@ def login():
         access_token = create_access_token(identity=str(user.id))
         return jsonify(access_token=access_token)
     return jsonify({"erro": "Credenciais inválidas"}), 401
+
+
+# --- ROTAS PROTEGIDAS ---
 @app.route('/processar_nota', methods=['POST'])
 @jwt_required()
 def processar_nota(): return jsonify({"mensagem": "Rota de processar nota funcionando!"})
+
 @app.route('/processar_imagem', methods=['POST'])
 @jwt_required()
 def processar_imagem(): return jsonify({"mensagem": "Rota de processar imagem funcionando!"})
+
+
+# --- ROTAS DE DADOS (CRUD Compras) ---
 @app.route('/compras', methods=['GET'])
 @jwt_required()
 def get_compras():
-    #...
     current_user_id = int(get_jwt_identity())
     mes_query = request.args.get('mes', default=datetime.now().month, type=int)
     ano_query = request.args.get('ano', default=datetime.now().year, type=int)
@@ -141,7 +184,6 @@ def get_compras():
 @app.route('/compras', methods=['POST'])
 @jwt_required()
 def add_compra():
-    #...
     current_user_id = int(get_jwt_identity())
     dados = request.get_json()
     if not dados or not all(k in dados for k in ['nome', 'quantidade', 'valor_unitario', 'data']): return jsonify({'erro': 'Dados da compra estão incompletos.'}), 400
@@ -152,7 +194,6 @@ def add_compra():
 @app.route('/compras/<int:compra_id>', methods=['PUT'])
 @jwt_required()
 def update_compra(compra_id):
-    #...
     current_user_id = int(get_jwt_identity())
     compra_para_atualizar = Compra.query.get(compra_id)
     if not compra_para_atualizar: return jsonify({'erro': 'Compra não encontrada'}), 404
@@ -169,7 +210,6 @@ def update_compra(compra_id):
 @app.route('/compras/<int:compra_id>', methods=['DELETE'])
 @jwt_required()
 def delete_compra(compra_id):
-    #...
     current_user_id = int(get_jwt_identity())
     compra_para_deletar = Compra.query.get(compra_id)
     if not compra_para_deletar: return jsonify({'erro': 'Compra não encontrada'}), 404
@@ -177,17 +217,17 @@ def delete_compra(compra_id):
     db.session.delete(compra_para_deletar)
     db.session.commit()
     return jsonify({'mensagem': 'Compra deletada com sucesso'}), 200
+
+# --- ROTAS DE CUSTOS FIXOS (CRUD) ---
 @app.route('/custos-fixos', methods=['GET'])
 @jwt_required()
 def get_custos_fixos():
-    #...
     current_user_id = int(get_jwt_identity())
     custos = CustoFixo.query.filter_by(user_id=current_user_id).order_by(CustoFixo.nome).all()
     return jsonify([custo.to_dict() for custo in custos]), 200
 @app.route('/custos-fixos', methods=['POST'])
 @jwt_required()
 def add_custo_fixo():
-    #...
     current_user_id = int(get_jwt_identity())
     dados = request.get_json()
     required_keys = ['nome', 'valor', 'categoria', 'tipoRecorrencia', 'diaDoMes', 'mesDeInicio']
@@ -199,7 +239,6 @@ def add_custo_fixo():
 @app.route('/custos-fixos/<int:custo_id>', methods=['PUT'])
 @jwt_required()
 def update_custo_fixo(custo_id):
-    #...
     current_user_id = int(get_jwt_identity())
     custo_para_atualizar = CustoFixo.query.get(custo_id)
     if not custo_para_atualizar: return jsonify({'erro': 'Custo fixo não encontrado'}), 404
@@ -217,7 +256,6 @@ def update_custo_fixo(custo_id):
 @app.route('/custos-fixos/<int:custo_id>', methods=['DELETE'])
 @jwt_required()
 def delete_custo_fixo(custo_id):
-    #...
     current_user_id = int(get_jwt_identity())
     custo_para_deletar = CustoFixo.query.get(custo_id)
     if not custo_para_deletar: return jsonify({'erro': 'Custo fixo não encontrado'}), 404
@@ -226,15 +264,13 @@ def delete_custo_fixo(custo_id):
     db.session.commit()
     return jsonify({'mensagem': 'Custo fixo deletado com sucesso'}), 200
 
-# --- NOVAS ROTAS DE CATEGORIAS (CRUD) ---
-
+# --- ROTAS DE CATEGORIAS (CRUD) ---
 @app.route('/categorias', methods=['GET'])
 @jwt_required()
 def get_categorias():
     current_user_id = int(get_jwt_identity())
     categorias = Categoria.query.filter_by(user_id=current_user_id).order_by(Categoria.nome).all()
     return jsonify([c.to_dict() for c in categorias]), 200
-
 @app.route('/categorias', methods=['POST'])
 @jwt_required()
 def add_categoria():
@@ -242,17 +278,10 @@ def add_categoria():
     dados = request.get_json()
     if not dados or not 'nome' in dados or not 'pictogram' in dados:
         return jsonify({'erro': 'Dados da categoria estão incompletos.'}), 400
-    
-    nova_categoria = Categoria(
-        nome=dados['nome'],
-        pictogram=dados['pictogram'],
-        parent_id=dados.get('parentId'),
-        user_id=current_user_id
-    )
+    nova_categoria = Categoria(nome=dados['nome'], pictogram=dados['pictogram'], parent_id=dados.get('parentId'), user_id=current_user_id)
     db.session.add(nova_categoria)
     db.session.commit()
     return jsonify(nova_categoria.to_dict()), 201
-
 @app.route('/categorias/<int:categoria_id>', methods=['PUT'])
 @jwt_required()
 def update_categoria(categoria_id):
@@ -260,17 +289,12 @@ def update_categoria(categoria_id):
     cat = Categoria.query.get(categoria_id)
     if not cat: return jsonify({'erro': 'Categoria não encontrada'}), 404
     if cat.user_id != current_user_id: return jsonify({'erro': 'Acesso não autorizado'}), 403
-    
     dados = request.get_json()
     if not dados: return jsonify({'erro': 'Nenhum dado fornecido'}), 400
-
     cat.nome = dados.get('nome', cat.nome)
     cat.pictogram = dados.get('pictogram', cat.pictogram)
-    # parent_id não é tipicamente editado, mas pode ser adicionado se necessário
-    
     db.session.commit()
     return jsonify(cat.to_dict()), 200
-
 @app.route('/categorias/<int:categoria_id>', methods=['DELETE'])
 @jwt_required()
 def delete_categoria(categoria_id):
@@ -278,7 +302,6 @@ def delete_categoria(categoria_id):
     cat = Categoria.query.get(categoria_id)
     if not cat: return jsonify({'erro': 'Categoria não encontrada'}), 404
     if cat.user_id != current_user_id: return jsonify({'erro': 'Acesso não autorizado'}), 403
-    
     db.session.delete(cat)
     db.session.commit()
     return jsonify({'mensagem': 'Categoria deletada com sucesso'}), 200
