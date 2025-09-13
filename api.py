@@ -11,15 +11,17 @@ from datetime import datetime
 
 load_dotenv()
 
-# --- Configuração e Modelos ---
+# --- Configuração Inicial e Extensões ---
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY')
+
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 jwt = JWTManager(app)
 
+# --- Modelos do Banco de Dados ---
 class User(db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
@@ -67,15 +69,20 @@ class Categoria(db.Model):
     def to_dict(self):
         return {'id': self.id, 'nome': self.nome, 'pictogram': self.pictogram, 'parentId': self.parent_id}
 
-# --- Rotas de Autenticação e Processamento ---
+# --- Rotas de Autenticação ---
 @app.route('/')
-def health_check(): return jsonify({"status": "healthy"}), 200
+def health_check():
+    return jsonify({"status": "healthy"}), 200
+
 @app.route('/register', methods=['POST'])
 def register():
     data = request.get_json()
-    email, password = data.get('email'), data.get('password')
-    if not email or not password: return jsonify({"erro": "Email e senha são obrigatórios"}), 400
-    if User.query.filter_by(email=email).first(): return jsonify({"erro": "Este email já está em uso"}), 409
+    email = data.get('email')
+    password = data.get('password')
+    if not email or not password:
+        return jsonify({"erro": "Email e senha são obrigatórios"}), 400
+    if User.query.filter_by(email=email).first():
+        return jsonify({"erro": "Este email já está em uso"}), 409
     new_user = User(email=email)
     new_user.set_password(password)
     db.session.add(new_user)
@@ -98,21 +105,74 @@ def register():
         db.session.add(nova_cat)
     db.session.commit()
     return jsonify({"mensagem": "Usuário criado com sucesso!"}), 201
+
 @app.route('/login', methods=['POST'])
 def login():
     data = request.get_json()
-    email, password = data.get('email'), data.get('password')
+    email = data.get('email')
+    password = data.get('password')
     user = User.query.filter_by(email=email).first()
     if user and user.check_password(password):
         access_token = create_access_token(identity=str(user.id))
         return jsonify(access_token=access_token)
     return jsonify({"erro": "Credenciais inválidas"}), 401
+
+# --- ROTAS PROTEGIDAS DE PROCESSAMENTO (COM LÓGICA DE SALVAR) ---
 @app.route('/processar_nota', methods=['POST'])
 @jwt_required()
-def processar_nota(): return jsonify({"mensagem": "Rota de processar nota funcionando!"})
+def processar_nota_e_salvar():
+    current_user_id = int(get_jwt_identity())
+    
+    link_nota = request.json.get('url')
+    if not link_nota:
+        return jsonify({'erro': 'URL da nota fiscal não fornecida.'}), 400
+
+    dados_extraidos = extrair_dados_nota_fiscal(link_nota)
+
+    if dados_extraidos and dados_extraidos.get('itens_comprados'):
+        for item in dados_extraidos['itens_comprados']:
+            nova_compra = Compra(
+                nome=item.get('nome', 'Item desconhecido'),
+                quantidade=item.get('quantidade', 1.0),
+                valor_unitario=item.get('valor_unitario', 0.0),
+                data=dados_extraidos.get('data', datetime.now().strftime("%d/%m/%Y")),
+                categoria=item.get('categoria'),
+                user_id=current_user_id
+            )
+            db.session.add(nova_compra)
+        
+        db.session.commit()
+        return jsonify(dados_extraidos)
+    else:
+        return jsonify({'erro': 'Não foi possível processar a nota fiscal.'}), 500
+
 @app.route('/processar_imagem', methods=['POST'])
 @jwt_required()
-def processar_imagem(): return jsonify({"mensagem": "Rota de processar imagem funcionando!"})
+def processar_imagem_e_salvar():
+    current_user_id = int(get_jwt_identity())
+    
+    if 'comprovante' not in request.files:
+        return jsonify({'erro': 'Nenhum arquivo de imagem enviado.'}), 400
+    
+    arquivo_imagem = request.files['comprovante']
+    dados_extraidos = analisar_imagem_comprovante(arquivo_imagem)
+    
+    if dados_extraidos and dados_extraidos.get('itens_comprados'):
+        for item in dados_extraidos['itens_comprados']:
+            nova_compra = Compra(
+                nome=item.get('nome', 'Compra de imagem'),
+                quantidade=item.get('quantidade', 1.0),
+                valor_unitario=item.get('valor_unitario', 0.0),
+                data=dados_extraidos.get('data', datetime.now().strftime("%d/%m/%Y")),
+                categoria=item.get('categoria'),
+                user_id=current_user_id
+            )
+            db.session.add(nova_compra)
+            
+        db.session.commit()
+        return jsonify(dados_extraidos)
+    else:
+        return jsonify({'erro': 'Não foi possível analisar o comprovante.'}), 500
 
 # --- ROTAS DE DADOS (CRUD Compras) ---
 @app.route('/compras', methods=['GET'])
@@ -143,6 +203,7 @@ def get_compras():
     resultado_variaveis = [compra.to_dict() for compra in compras_variaveis]
     resultado_final = resultado_variaveis + compras_de_custos_fixos
     return jsonify(resultado_final), 200
+
 @app.route('/compras', methods=['POST'])
 @jwt_required()
 def add_compra():
@@ -153,6 +214,7 @@ def add_compra():
     db.session.add(nova_compra)
     db.session.commit()
     return jsonify(nova_compra.to_dict()), 201
+
 @app.route('/compras/<int:compra_id>', methods=['PUT'])
 @jwt_required()
 def update_compra(compra_id):
@@ -169,6 +231,7 @@ def update_compra(compra_id):
     compra_para_atualizar.categoria = dados.get('categoria', compra_para_atualizar.categoria)
     db.session.commit()
     return jsonify(compra_para_atualizar.to_dict()), 200
+
 @app.route('/compras/<int:compra_id>', methods=['DELETE'])
 @jwt_required()
 def delete_compra(compra_id):
@@ -179,6 +242,7 @@ def delete_compra(compra_id):
     db.session.delete(compra_para_deletar)
     db.session.commit()
     return jsonify({'mensagem': 'Compra deletada com sucesso'}), 200
+
 # --- ROTAS DE CUSTOS FIXOS (CRUD) ---
 @app.route('/custos-fixos', methods=['GET'])
 @jwt_required()
@@ -186,6 +250,7 @@ def get_custos_fixos():
     current_user_id = int(get_jwt_identity())
     custos = CustoFixo.query.filter_by(user_id=current_user_id).order_by(CustoFixo.nome).all()
     return jsonify([custo.to_dict() for custo in custos]), 200
+
 @app.route('/custos-fixos', methods=['POST'])
 @jwt_required()
 def add_custo_fixo():
@@ -197,6 +262,7 @@ def add_custo_fixo():
     db.session.add(novo_custo)
     db.session.commit()
     return jsonify(novo_custo.to_dict()), 201
+
 @app.route('/custos-fixos/<int:custo_id>', methods=['PUT'])
 @jwt_required()
 def update_custo_fixo(custo_id):
@@ -214,6 +280,7 @@ def update_custo_fixo(custo_id):
     custo_para_atualizar.mes_de_inicio = dados.get('mesDeInicio', custo_para_atualizar.mes_de_inicio)
     db.session.commit()
     return jsonify(custo_para_atualizar.to_dict()), 200
+
 @app.route('/custos-fixos/<int:custo_id>', methods=['DELETE'])
 @jwt_required()
 def delete_custo_fixo(custo_id):
@@ -232,6 +299,7 @@ def get_categorias():
     current_user_id = int(get_jwt_identity())
     categorias = Categoria.query.filter_by(user_id=current_user_id).order_by(Categoria.nome).all()
     return jsonify([c.to_dict() for c in categorias]), 200
+
 @app.route('/categorias', methods=['POST'])
 @jwt_required()
 def add_categoria():
@@ -243,6 +311,7 @@ def add_categoria():
     db.session.add(nova_categoria)
     db.session.commit()
     return jsonify(nova_categoria.to_dict()), 201
+
 @app.route('/categorias/<int:categoria_id>', methods=['PUT'])
 @jwt_required()
 def update_categoria(categoria_id):
@@ -256,6 +325,7 @@ def update_categoria(categoria_id):
     cat.pictogram = dados.get('pictogram', cat.pictogram)
     db.session.commit()
     return jsonify(cat.to_dict()), 200
+
 @app.route('/categorias/<int:categoria_id>', methods=['DELETE'])
 @jwt_required()
 def delete_categoria(categoria_id):
@@ -267,29 +337,21 @@ def delete_categoria(categoria_id):
     db.session.commit()
     return jsonify({'mensagem': 'Categoria deletada com sucesso'}), 200
 
-# --- NOVA ROTA DE RELATÓRIOS ---
+# --- ROTA DE RELATÓRIOS ---
 @app.route('/relatorios/gastos-por-categoria', methods=['GET'])
 @jwt_required()
 def get_gastos_por_categoria():
     current_user_id = int(get_jwt_identity())
-    
     mes_query = request.args.get('mes', default=datetime.now().month, type=int)
     ano_query = request.args.get('ano', default=datetime.now().year, type=int)
-
     mes_ano_str = f"{mes_query:02d}/{ano_query}"
-    compras_variaveis = Compra.query.filter(
-        Compra.user_id == current_user_id,
-        Compra.data.like(f"%/{mes_ano_str}")
-    ).all()
-    
+    compras_variaveis = Compra.query.filter(Compra.user_id == current_user_id, Compra.data.like(f"%/{mes_ano_str}")).all()
     custos_fixos_todos = CustoFixo.query.filter_by(user_id=current_user_id).all()
     gastos_totais = {}
-
     for compra in compras_variaveis:
         categoria = compra.categoria if compra.categoria else 'Não Categorizado'
         valor = compra.quantidade * compra.valor_unitario
         gastos_totais[categoria] = gastos_totais.get(categoria, 0) + valor
-
     for custo in custos_fixos_todos:
         adicionar = False
         mes_base = custo.mes_de_inicio
@@ -302,11 +364,9 @@ def get_gastos_por_categoria():
             if (mes_query - mes_base) >= 0 and (mes_query - mes_base) % 6 == 0: adicionar = True
         elif custo.tipo_recorrencia == 'anual':
             if mes_query == mes_base: adicionar = True
-        
         if adicionar:
             categoria = custo.categoria if custo.categoria else 'Não Categorizado'
             gastos_totais[categoria] = gastos_totais.get(categoria, 0) + custo.valor
-            
     return jsonify(gastos_totais), 200
 
 if __name__ == '__main__':
