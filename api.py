@@ -386,7 +386,6 @@ def get_gastos_por_categoria():
             gastos_totais[categoria] = gastos_totais.get(categoria, 0) + custo.valor
     return jsonify(gastos_totais), 200
 
-# NOVA ROTA DO DASHBOARD
 @app.route('/dashboard', methods=['GET'])
 @jwt_required()
 def get_dashboard_data():
@@ -396,7 +395,6 @@ def get_dashboard_data():
     ano_atual = hoje.year
 
     # --- 1. Calcular Gastos Totais e por Categoria ---
-    # (Esta parte reutiliza a mesma lógica da rota de relatórios)
     gastos_por_categoria = {}
     mes_ano_str = f"{mes_atual:02d}/{ano_atual}"
     compras_variaveis = Compra.query.filter(Compra.user_id == current_user_id, Compra.data.like(f"%/{mes_ano_str}")).all()
@@ -425,7 +423,7 @@ def get_dashboard_data():
     maiores_categorias_ordenadas = sorted(gastos_por_categoria.items(), key=lambda item: item[1], reverse=True)
     maiores_categorias = [{'categoria': k, 'valor': v} for k, v in maiores_categorias_ordenadas[:5]]
 
-    # --- 2. Calcular Próximos Custos Fixos ---
+    # --- 2. Calcular Próximos Custos Fixos (LÓGICA CORRIGIDA) ---
     proximos_custos_fixos = []
     for custo in custos_fixos_todos:
         if custo.dia_do_mes >= hoje.day:
@@ -440,8 +438,13 @@ def get_dashboard_data():
                 if (mes_atual - mes_base) >= 0 and (mes_atual - mes_base) % 6 == 0: adicionar = True
             elif custo.tipo_recorrencia == 'anual':
                 if mes_atual == mes_base: adicionar = True
+            
             if adicionar:
-                proximos_custos_fixos.append({'nome': custo.nome, 'diaVencimento': custo.dia_do_mes, 'valor': custo.valor})
+                proximos_custos_fixos.append({
+                    'nome': custo.nome,
+                    'diaVencimento': custo.dia_do_mes,
+                    'valor': custo.valor
+                })
     
     proximos_custos_fixos.sort(key=lambda item: item['diaVencimento'])
     
@@ -452,6 +455,7 @@ def get_dashboard_data():
         'proximosCustosFixos': proximos_custos_fixos[:3]
     }
     return jsonify(dashboard_data), 200
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=os.getenv('PORT', 5000))
