@@ -26,6 +26,7 @@ jwt = JWTManager(app)
 
 # --- Modelos do Banco de Dados ---
 class User(db.Model):
+    # ... (sem alterações)
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(120), unique=True, nullable=False)
@@ -39,6 +40,7 @@ class User(db.Model):
     def check_password(self, password): return check_password_hash(self.password_hash, password)
 
 class Compra(db.Model):
+    # ... (sem alterações)
     __tablename__ = 'compras'
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(100), nullable=False)
@@ -59,11 +61,24 @@ class CustoFixo(db.Model):
     tipo_recorrencia = db.Column(db.String(20), nullable=False)
     dia_do_mes = db.Column(db.Integer, nullable=False)
     mes_de_inicio = db.Column(db.Integer, nullable=False, default=1)
+    
+    # --- ALTERAÇÃO CRÍTICA PARA A MIGRAÇÃO ---
+    # Adicionamos 'server_default' para que a migração funcione automaticamente
+    # em registros que já existem no banco de dados. O valor '2025' é um exemplo.
+    ano_de_inicio = db.Column(db.Integer, nullable=False, server_default='2025')
+    
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    
     def to_dict(self):
-        return {'id': self.id, 'nome': self.nome, 'valor': self.valor, 'categoria': self.categoria, 'tipoRecorrencia': self.tipo_recorrencia, 'diaDoMes': self.dia_do_mes, 'mesDeInicio': self.mes_de_inicio}
+        return {
+            'id': self.id, 'nome': self.nome, 'valor': self.valor, 'categoria': self.categoria,
+            'tipoRecorrencia': self.tipo_recorrencia, 'diaDoMes': self.dia_do_mes,
+            'mesDeInicio': self.mes_de_inicio,
+            'anoDeInicio': self.ano_de_inicio
+        }
 
 class Categoria(db.Model):
+    # ... (sem alterações)
     __tablename__ = 'categorias'
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(100), nullable=False)
@@ -74,8 +89,35 @@ class Categoria(db.Model):
     def to_dict(self):
         return {'id': self.id, 'nome': self.nome, 'pictogram': self.pictogram, 'parentId': self.parent_id}
 
+# --- FUNÇÃO AUXILIAR PARA VERIFICAR RECORRÊNCIA (LÓGICA CORRIGIDA) ---
+def deve_incluir_custo_fixo(custo, mes_alvo, ano_alvo):
+    # Cria objetos de data para comparação, ignorando o dia
+    data_inicio = date(custo.ano_de_inicio, custo.mes_de_inicio, 1)
+    data_alvo = date(ano_alvo, mes_alvo, 1)
+
+    # Se a data alvo for anterior à data de início, nunca incluir
+    if data_alvo < data_inicio:
+        return False
+
+    # Calcula a diferença total de meses entre a data de início e a data alvo
+    meses_de_diferenca = (data_alvo.year - data_inicio.year) * 12 + (data_alvo.month - data_inicio.month)
+
+    if custo.tipo_recorrencia == 'mensal':
+        return True # Se já passou da data de início, mensal sempre inclui
+    elif custo.tipo_recorrencia == 'bimestral':
+        return meses_de_diferenca % 2 == 0
+    elif custo.tipo_recorrencia == 'trimestral':
+        return meses_de_diferenca % 3 == 0
+    elif custo.tipo_recorrencia == 'semestral':
+        return meses_de_diferenca % 6 == 0
+    elif custo.tipo_recorrencia == 'anual':
+        return meses_de_diferenca % 12 == 0
+    
+    return False
+
 # --- FUNÇÃO AUXILIAR PARA ENVIAR E-MAIL ---
 def send_password_reset_email(user):
+    # ... (sem alterações)
     token = secrets.token_urlsafe(32)
     user.reset_token = token
     user.reset_token_expiration = datetime.now(timezone.utc) + timedelta(hours=1)
@@ -95,6 +137,7 @@ def send_password_reset_email(user):
 
 # --- FUNÇÃO AUXILIAR PARA CALCULAR GASTOS DE UM MÊS ---
 def calcular_gastos_do_mes(user_id, mes, ano):
+    # ... (sem alterações)
     total_variavel = 0
     total_fixo = 0
     
@@ -108,18 +151,7 @@ def calcular_gastos_do_mes(user_id, mes, ano):
 
     custos_fixos_todos = CustoFixo.query.filter_by(user_id=user_id).all()
     for custo in custos_fixos_todos:
-        adicionar = False
-        mes_base = custo.mes_de_inicio
-        if custo.tipo_recorrencia == 'mensal': adicionar = True
-        elif custo.tipo_recorrencia == 'bimestral':
-            if (mes - mes_base) >= 0 and (mes - mes_base) % 2 == 0: adicionar = True
-        elif custo.tipo_recorrencia == 'trimestral':
-            if (mes - mes_base) >= 0 and (mes - mes_base) % 3 == 0: adicionar = True
-        elif custo.tipo_recorrencia == 'semestral':
-            if (mes - mes_base) >= 0 and (mes - mes_base) % 6 == 0: adicionar = True
-        elif custo.tipo_recorrencia == 'anual':
-            if mes == mes_base: adicionar = True
-        if adicionar:
+        if deve_incluir_custo_fixo(custo, mes, ano):
             total_fixo += custo.valor
             
     return total_variavel, total_fixo
@@ -128,6 +160,7 @@ def calcular_gastos_do_mes(user_id, mes, ano):
 @app.route('/')
 def health_check(): return jsonify({"status": "healthy"}), 200
 
+# ... (Rotas /register, /login, /forgot-password, /reset-password, /processar_nota, /processar_imagem sem alterações)
 @app.route('/register', methods=['POST'])
 def register():
     data = request.get_json()
@@ -229,28 +262,24 @@ def processar_imagem_e_salvar():
 @app.route('/compras', methods=['GET'])
 @jwt_required()
 def get_compras():
+    # ... (sem alterações)
     current_user_id = int(get_jwt_identity())
     mes_query = request.args.get('mes', default=datetime.now().month, type=int)
     ano_query = request.args.get('ano', default=datetime.now().year, type=int)
-    mes_ano_str = f"{mes_query:02d}/{ano_query}"
-    compras_variaveis = Compra.query.filter(Compra.user_id == current_user_id, Compra.data.like(f"%/{mes_ano_str}")).all()
+    
+    compras_variaveis = Compra.query.filter(Compra.user_id == current_user_id, Compra.data.like(f"%/{mes_query:02d}/{ano_query}")).all()
     custos_fixos_todos = CustoFixo.query.filter_by(user_id=current_user_id).all()
+    
     compras_de_custos_fixos = []
     for custo in custos_fixos_todos:
-        adicionar = False
-        mes_base = custo.mes_de_inicio
-        if custo.tipo_recorrencia == 'mensal': adicionar = True
-        elif custo.tipo_recorrencia == 'bimestral':
-            if (mes_query - mes_base) >= 0 and (mes_query - mes_base) % 2 == 0: adicionar = True
-        elif custo.tipo_recorrencia == 'trimestral':
-            if (mes_query - mes_base) >= 0 and (mes_query - mes_base) % 3 == 0: adicionar = True
-        elif custo.tipo_recorrencia == 'semestral':
-            if (mes_query - mes_base) >= 0 and (mes_query - mes_base) % 6 == 0: adicionar = True
-        elif custo.tipo_recorrencia == 'anual':
-            if mes_query == mes_base: adicionar = True
-        if adicionar:
-            compra_projetada = {'id': -custo.id, 'nome': f"{custo.nome} (Fixo)", 'quantidade': 1, 'valorUnitario': custo.valor, 'data': f"{custo.dia_do_mes:02d}/{mes_query:02d}/{ano_query}", 'categoria': custo.categoria}
+        if deve_incluir_custo_fixo(custo, mes_query, ano_query):
+            compra_projetada = {
+                'id': -custo.id, 'nome': f"{custo.nome} (Fixo)", 'quantidade': 1,
+                'valorUnitario': custo.valor, 'data': f"{custo.dia_do_mes:02d}/{mes_query:02d}/{ano_query}",
+                'categoria': custo.categoria
+            }
             compras_de_custos_fixos.append(compra_projetada)
+            
     resultado_variaveis = [compra.to_dict() for compra in compras_variaveis]
     resultado_final = resultado_variaveis + compras_de_custos_fixos
     return jsonify(resultado_final), 200
@@ -258,6 +287,7 @@ def get_compras():
 @app.route('/compras', methods=['POST'])
 @jwt_required()
 def add_compra():
+    # ... (sem alterações)
     current_user_id = int(get_jwt_identity())
     dados = request.get_json()
     if not dados or not all(k in dados for k in ['nome', 'quantidade', 'valor_unitario', 'data']): return jsonify({'erro': 'Dados da compra estão incompletos.'}), 400
@@ -266,6 +296,7 @@ def add_compra():
     db.session.commit()
     return jsonify(nova_compra.to_dict()), 201
 
+# ... (Rotas /compras/<id> PUT e DELETE sem alterações)
 @app.route('/compras/<int:compra_id>', methods=['PUT'])
 @jwt_required()
 def update_compra(compra_id):
@@ -297,6 +328,7 @@ def delete_compra(compra_id):
 @app.route('/custos-fixos', methods=['GET'])
 @jwt_required()
 def get_custos_fixos():
+    # ... (sem alterações)
     current_user_id = int(get_jwt_identity())
     custos = CustoFixo.query.filter_by(user_id=current_user_id).order_by(CustoFixo.nome).all()
     return jsonify([custo.to_dict() for custo in custos]), 200
@@ -304,11 +336,23 @@ def get_custos_fixos():
 @app.route('/custos-fixos', methods=['POST'])
 @jwt_required()
 def add_custo_fixo():
+    # ... (sem alterações, mas o modelo agora usa server_default)
     current_user_id = int(get_jwt_identity())
     dados = request.get_json()
-    required_keys = ['nome', 'valor', 'categoria', 'tipoRecorrencia', 'diaDoMes', 'mesDeInicio']
-    if not dados or not all(k in dados for k in required_keys): return jsonify({'erro': 'Dados do custo fixo estão incompletos.'}), 400
-    novo_custo = CustoFixo(user_id=current_user_id, nome=dados['nome'], valor=dados['valor'], categoria=dados['categoria'], tipo_recorrencia=dados['tipoRecorrencia'], dia_do_mes=dados['diaDoMes'], mes_de_inicio=dados['mesDeInicio'])
+    required_keys = ['nome', 'valor', 'categoria', 'tipoRecorrencia', 'diaDoMes', 'mesDeInicio', 'anoDeInicio']
+    if not dados or not all(k in dados for k in required_keys): 
+        return jsonify({'erro': 'Dados do custo fixo estão incompletos.'}), 400
+        
+    novo_custo = CustoFixo(
+        user_id=current_user_id,
+        nome=dados['nome'],
+        valor=dados['valor'],
+        categoria=dados['categoria'],
+        tipo_recorrencia=dados['tipoRecorrencia'],
+        dia_do_mes=dados['diaDoMes'],
+        mes_de_inicio=dados['mesDeInicio'],
+        ano_de_inicio=dados['anoDeInicio']
+    )
     db.session.add(novo_custo)
     db.session.commit()
     return jsonify(novo_custo.to_dict()), 201
@@ -316,6 +360,7 @@ def add_custo_fixo():
 @app.route('/custos-fixos/<int:custo_id>', methods=['PUT'])
 @jwt_required()
 def update_custo_fixo(custo_id):
+    # ... (sem alterações)
     current_user_id = int(get_jwt_identity())
     custo_para_atualizar = CustoFixo.query.get(custo_id)
     if not custo_para_atualizar: return jsonify({'erro': 'Custo fixo não encontrado'}), 404
@@ -328,12 +373,14 @@ def update_custo_fixo(custo_id):
     custo_para_atualizar.tipo_recorrencia = dados.get('tipoRecorrencia', custo_para_atualizar.tipo_recorrencia)
     custo_para_atualizar.dia_do_mes = dados.get('diaDoMes', custo_para_atualizar.dia_do_mes)
     custo_para_atualizar.mes_de_inicio = dados.get('mesDeInicio', custo_para_atualizar.mes_de_inicio)
+    custo_para_atualizar.ano_de_inicio = dados.get('anoDeInicio', custo_para_atualizar.ano_de_inicio)
     db.session.commit()
     return jsonify(custo_para_atualizar.to_dict()), 200
 
 @app.route('/custos-fixos/<int:custo_id>', methods=['DELETE'])
 @jwt_required()
 def delete_custo_fixo(custo_id):
+    # ... (sem alterações)
     current_user_id = int(get_jwt_identity())
     custo_para_deletar = CustoFixo.query.get(custo_id)
     if not custo_para_deletar: return jsonify({'erro': 'Custo fixo não encontrado'}), 404
@@ -342,6 +389,7 @@ def delete_custo_fixo(custo_id):
     db.session.commit()
     return jsonify({'mensagem': 'Custo fixo deletado com sucesso'}), 200
 
+# ... (Rotas de Categorias sem alterações)
 @app.route('/categorias', methods=['GET'])
 @jwt_required()
 def get_categorias():
@@ -389,37 +437,34 @@ def delete_categoria(categoria_id):
 @app.route('/relatorios/gastos-por-categoria', methods=['GET'])
 @jwt_required()
 def get_gastos_por_categoria():
+    # ... (sem alterações)
     current_user_id = int(get_jwt_identity())
     mes_query = request.args.get('mes', default=datetime.now().month, type=int)
     ano_query = request.args.get('ano', default=datetime.now().year, type=int)
-    mes_ano_str = f"{mes_query:02d}/{ano_query}"
-    compras_variaveis = Compra.query.filter(Compra.user_id == current_user_id, Compra.data.like(f"%/{mes_ano_str}")).all()
+    
+    compras_variaveis = Compra.query.filter(
+        Compra.user_id == current_user_id,
+        Compra.data.like(f"%/{mes_query:02d}/{ano_query}")
+    ).all()
     custos_fixos_todos = CustoFixo.query.filter_by(user_id=current_user_id).all()
+    
     gastos_totais = {}
     for compra in compras_variaveis:
         categoria = compra.categoria if compra.categoria else 'Não Categorizado'
         valor = compra.quantidade * compra.valor_unitario
         gastos_totais[categoria] = gastos_totais.get(categoria, 0) + valor
+        
     for custo in custos_fixos_todos:
-        adicionar = False
-        mes_base = custo.mes_de_inicio
-        if custo.tipo_recorrencia == 'mensal': adicionar = True
-        elif custo.tipo_recorrencia == 'bimestral':
-            if (mes_query - mes_base) >= 0 and (mes_query - mes_base) % 2 == 0: adicionar = True
-        elif custo.tipo_recorrencia == 'trimestral':
-            if (mes_query - mes_base) >= 0 and (mes_query - mes_base) % 3 == 0: adicionar = True
-        elif custo.tipo_recorrencia == 'semestral':
-            if (mes_query - mes_base) >= 0 and (mes_query - mes_base) % 6 == 0: adicionar = True
-        elif custo.tipo_recorrencia == 'anual':
-            if mes_query == mes_base: adicionar = True
-        if adicionar:
+        if deve_incluir_custo_fixo(custo, mes_query, ano_query):
             categoria = custo.categoria if custo.categoria else 'Não Categorizado'
             gastos_totais[categoria] = gastos_totais.get(categoria, 0) + custo.valor
+            
     return jsonify(gastos_totais), 200
 
 @app.route('/dashboard', methods=['GET'])
 @jwt_required()
 def get_dashboard_data():
+    # ... (sem alterações)
     current_user_id = int(get_jwt_identity())
     hoje = date.today()
     mes_atual = hoje.month
@@ -439,20 +484,8 @@ def get_dashboard_data():
     proximos_custos_fixos = []
     custos_fixos_todos = CustoFixo.query.filter_by(user_id=current_user_id).all()
     for custo in custos_fixos_todos:
-        if custo.dia_do_mes >= hoje.day:
-            adicionar = False
-            mes_base = custo.mes_de_inicio
-            if custo.tipo_recorrencia == 'mensal': adicionar = True
-            elif custo.tipo_recorrencia == 'bimestral':
-                if (mes_atual - mes_base) >= 0 and (mes_atual - mes_base) % 2 == 0: adicionar = True
-            elif custo.tipo_recorrencia == 'trimestral':
-                if (mes_atual - mes_base) >= 0 and (mes_atual - mes_base) % 3 == 0: adicionar = True
-            elif custo.tipo_recorrencia == 'semestral':
-                if (mes_atual - mes_base) >= 0 and (mes_atual - mes_base) % 6 == 0: adicionar = True
-            elif custo.tipo_recorrencia == 'anual':
-                if mes_atual == mes_base: adicionar = True
-            if adicionar:
-                proximos_custos_fixos.append({'nome': custo.nome, 'diaVencimento': custo.dia_do_mes, 'valor': custo.valor})
+        if custo.dia_do_mes >= hoje.day and deve_incluir_custo_fixo(custo, mes_atual, ano_atual):
+            proximos_custos_fixos.append({'nome': custo.nome, 'diaVencimento': custo.dia_do_mes, 'valor': custo.valor})
     
     proximos_custos_fixos.sort(key=lambda item: item['diaVencimento'])
     
