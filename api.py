@@ -1,6 +1,7 @@
-# api.py (Versão com Receitas Recorrentes)
+# api.py (Versão com Validação de Receitas)
 
 import os
+# ... (outros imports permanecem os mesmos)
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -23,8 +24,8 @@ migrate = Migrate(app, db)
 jwt = JWTManager(app)
 
 # --- Modelos do Banco de Dados ---
+# ... (Nenhuma alteração nos modelos User, Receita, Compra, CustoFixo, Categoria)
 class User(db.Model):
-    # ... (sem alterações)
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(120), unique=True, nullable=False)
@@ -38,18 +39,16 @@ class User(db.Model):
     def set_password(self, password): self.password_hash = generate_password_hash(password)
     def check_password(self, password): return check_password_hash(self.password_hash, password)
 
-
-# --- ALTERAÇÃO 1: Modelo de Receita reestruturado como Template de Recorrência ---
 class Receita(db.Model):
     __tablename__ = 'receitas'
     id = db.Column(db.Integer, primary_key=True)
     descricao = db.Column(db.String(100), nullable=False)
     valor = db.Column(db.Float, nullable=False)
-    tipo_recorrencia = db.Column(db.String(20), nullable=False) # 'unico', 'mensal', 'anual'
-    dia_do_mes = db.Column(db.Integer, nullable=True) # Nulo para 'unico'
-    mes_de_inicio = db.Column(db.Integer, nullable=True) # Nulo para 'unico'
-    ano_de_inicio = db.Column(db.Integer, nullable=True) # Nulo para 'unico'
-    data_unica = db.Column(db.String(10), nullable=True) # Apenas para tipo 'unico'
+    tipo_recorrencia = db.Column(db.String(20), nullable=False) 
+    dia_do_mes = db.Column(db.Integer, nullable=True)
+    mes_de_inicio = db.Column(db.Integer, nullable=True)
+    ano_de_inicio = db.Column(db.Integer, nullable=True)
+    data_unica = db.Column(db.String(10), nullable=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     
     def to_dict(self):
@@ -64,7 +63,6 @@ class Receita(db.Model):
             'dataUnica': self.data_unica
         }
 
-# ... (Modelos Compra, CustoFixo, Categoria permanecem os mesmos)
 class Compra(db.Model):
     __tablename__ = 'compras'
     id = db.Column(db.Integer, primary_key=True)
@@ -109,7 +107,7 @@ class Categoria(db.Model):
 
 
 # --- FUNÇÕES AUXILIARES ---
-# ... (deve_incluir_custo_fixo, send_password_reset_email, calcular_gastos_do_mes)
+# ... (Nenhuma alteração nas funções auxiliares)
 def deve_incluir_custo_fixo(custo, mes_alvo, ano_alvo):
     # Cria objetos de data para comparação, ignorando o dia
     data_inicio = date(custo.ano_de_inicio, custo.mes_de_inicio, 1)
@@ -135,7 +133,6 @@ def deve_incluir_custo_fixo(custo, mes_alvo, ano_alvo):
     
     return False
 
-# --- NOVA FUNÇÃO AUXILIAR PARA RECEITAS ---
 def deve_incluir_receita(receita, mes_alvo, ano_alvo):
     if receita.tipo_recorrencia == 'unico':
         try:
@@ -159,7 +156,6 @@ def deve_incluir_receita(receita, mes_alvo, ano_alvo):
     
     return False
 
-# ... (send_password_reset_email e calcular_gastos_do_mes sem alterações)
 def send_password_reset_email(user):
     # ... (sem alterações)
     token = secrets.token_urlsafe(32)
@@ -199,7 +195,6 @@ def calcular_gastos_do_mes(user_id, mes, ano):
             total_fixo += custo.valor
             
     return total_variavel, total_fixo
-
 
 # --- ROTAS ---
 # ... (Rotas de Health Check, Autenticação, OCR, e CRUD de Compras/Custos Fixos/Categorias permanecem iguais)
@@ -473,43 +468,37 @@ def delete_categoria(categoria_id):
     return jsonify({'mensagem': 'Categoria deletada com sucesso'}), 200
 
 
-# --- ALTERAÇÃO 2: Rotas de Receitas modificadas para o novo modelo ---
+# --- ROTAS DE RECEITAS COM VALIDAÇÃO ---
 @app.route('/receitas', methods=['GET'])
 @jwt_required()
 def get_receitas():
     current_user_id = int(get_jwt_identity())
-    mes_query = request.args.get('mes', default=datetime.now().month, type=int)
-    ano_query = request.args.get('ano', default=datetime.now().year, type=int)
-    
-    # Busca todos os templates de receita do usuário
-    templates_de_receita = Receita.query.filter_by(user_id=current_user_id).all()
-    
-    receitas_projetadas = []
-    for receita_template in templates_de_receita:
-        if deve_incluir_receita(receita_template, mes_query, ano_query):
-            # Para 'unico', a data vem do próprio registro. Para outros, é projetada.
-            data_final = receita_template.data_unica
-            if receita_template.tipo_recorrencia != 'unico':
-                data_final = f"{receita_template.dia_do_mes:02d}/{mes_query:02d}/{ano_query}"
-
-            receita_projetada = {
-                'id': receita_template.id, # Usamos o ID do template para edição/exclusão
-                'descricao': receita_template.descricao,
-                'valor': receita_template.valor,
-                'data': data_final
-            }
-            receitas_projetadas.append(receita_projetada)
-
-    return jsonify(receitas_projetadas), 200
+    templates_de_receita = Receita.query.filter_by(user_id=current_user_id).order_by(Receita.descricao).all()
+    return jsonify([r.to_dict() for r in templates_de_receita]), 200
 
 @app.route('/receitas', methods=['POST'])
 @jwt_required()
 def add_receita():
+    # --- ALTERAÇÃO: Adicionada validação robusta ---
     current_user_id = int(get_jwt_identity())
     dados = request.get_json()
+
+    # Validação básica
     if not dados or not all(k in dados for k in ['descricao', 'valor', 'tipoRecorrencia']):
-        return jsonify({'erro': 'Dados da receita estão incompletos.'}), 400
+        return jsonify({'erro': 'Dados essenciais da receita estão incompletos.'}), 400
+
+    tipo_recorrencia = dados.get('tipoRecorrencia')
     
+    # Validação condicional
+    if tipo_recorrencia == 'unico':
+        if not dados.get('dataUnica'):
+            return jsonify({'erro': 'Para receita de ocorrência única, a data é obrigatória.'}), 400
+    elif tipo_recorrencia in ['mensal', 'anual']:
+        if not all(k in dados and dados[k] is not None for k in ['diaDoMes', 'mesDeInicio', 'anoDeInicio']):
+            return jsonify({'erro': 'Para receitas recorrentes, o dia, mês e ano de início são obrigatórios.'}), 400
+    else:
+        return jsonify({'erro': f'Tipo de recorrência inválido: {tipo_recorrencia}'}), 400
+
     nova_receita = Receita(
         user_id=current_user_id,
         descricao=dados['descricao'],
@@ -527,27 +516,49 @@ def add_receita():
 @app.route('/receitas/<int:receita_id>', methods=['PUT'])
 @jwt_required()
 def update_receita(receita_id):
+    # --- ALTERAÇÃO: Adicionada validação robusta ---
     current_user_id = int(get_jwt_identity())
     receita = Receita.query.get(receita_id)
-    if not receita:
-        return jsonify({'erro': 'Receita não encontrada'}), 404
-    if receita.user_id != current_user_id:
-        return jsonify({'erro': 'Acesso não autorizado'}), 403
+    if not receita: return jsonify({'erro': 'Receita não encontrada'}), 404
+    if receita.user_id != current_user_id: return jsonify({'erro': 'Acesso não autorizado'}), 403
         
     dados = request.get_json()
+    if not dados: return jsonify({'erro': 'Nenhum dado para atualizar'}), 400
+
+    # Valida os dados recebidos antes de aplicar
+    tipo_recorrencia = dados.get('tipoRecorrencia', receita.tipo_recorrencia)
+    if tipo_recorrencia == 'unico':
+        if 'dataUnica' in dados and not dados.get('dataUnica'):
+            return jsonify({'erro': 'Para receita de ocorrência única, a data é obrigatória.'}), 400
+    elif tipo_recorrencia in ['mensal', 'anual']:
+        required_keys = ['diaDoMes', 'mesDeInicio', 'anoDeInicio']
+        # Verifica se alguma chave requerida está presente mas é nula
+        if any(k in dados and dados[k] is None for k in required_keys):
+             return jsonify({'erro': 'Para receitas recorrentes, o dia, mês e ano de início são obrigatórios.'}), 400
+    
     receita.descricao = dados.get('descricao', receita.descricao)
     receita.valor = dados.get('valor', receita.valor)
     receita.tipo_recorrencia = dados.get('tipoRecorrencia', receita.tipo_recorrencia)
-    receita.dia_do_mes = dados.get('diaDoMes', receita.dia_do_mes)
-    receita.mes_de_inicio = dados.get('mesDeInicio', receita.mes_de_inicio)
-    receita.ano_de_inicio = dados.get('anoDeInicio', receita.ano_de_inicio)
-    receita.data_unica = dados.get('dataUnica', receita.data_unica)
+    
+    # Lógica para limpar campos que não são mais necessários
+    if receita.tipo_recorrencia == 'unico':
+        receita.data_unica = dados.get('dataUnica', receita.data_unica)
+        receita.dia_do_mes = None
+        receita.mes_de_inicio = None
+        receita.ano_de_inicio = None
+    else: # Recorrente
+        receita.data_unica = None
+        receita.dia_do_mes = dados.get('diaDoMes', receita.dia_do_mes)
+        receita.mes_de_inicio = dados.get('mesDeInicio', receita.mes_de_inicio)
+        receita.ano_de_inicio = dados.get('anoDeInicio', receita.ano_de_inicio)
+
     db.session.commit()
     return jsonify(receita.to_dict()), 200
 
 @app.route('/receitas/<int:receita_id>', methods=['DELETE'])
 @jwt_required()
 def delete_receita(receita_id):
+    # ... (sem alterações)
     current_user_id = int(get_jwt_identity())
     receita = Receita.query.get(receita_id)
     if not receita:
@@ -558,6 +569,7 @@ def delete_receita(receita_id):
     db.session.delete(receita)
     db.session.commit()
     return jsonify({'mensagem': 'Receita deletada com sucesso'}), 200
+
 
 @app.route('/relatorios/gastos-por-categoria', methods=['GET'])
 @jwt_required()
@@ -592,7 +604,7 @@ def get_dashboard_data():
     total_variavel_atual, total_fixo_atual = calcular_gastos_do_mes(current_user_id, mes_atual, ano_atual)
     total_gasto_mes_atual = total_variavel_atual + total_fixo_atual
     
-    # --- ALTERAÇÃO 3: Lógica do Dashboard para usar a projeção de receitas ---
+    # Lógica do Dashboard para usar a projeção de receitas 
     templates_de_receita = Receita.query.filter_by(user_id=current_user_id).all()
     total_receita_mes_atual = 0
     for receita in templates_de_receita:
