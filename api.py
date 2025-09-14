@@ -1,7 +1,6 @@
-# api.py (Versão com Receitas)
+# api.py (Versão com Receitas Recorrentes)
 
 import os
-# ... (outros imports permanecem os mesmos)
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -15,22 +14,19 @@ from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 
 load_dotenv()
-
-# ... (Configuração Inicial e Extensões permanecem as mesmas)
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY')
-
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 jwt = JWTManager(app)
 
 # --- Modelos do Banco de Dados ---
 class User(db.Model):
+    # ... (sem alterações)
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
-    # ... (campos do User)
     email = db.Column(db.String(120), unique=True, nullable=False)
     password_hash = db.Column(db.String(256), nullable=False)
     reset_token = db.Column(db.String(100), unique=True, nullable=True)
@@ -38,19 +34,22 @@ class User(db.Model):
     compras = db.relationship('Compra', backref='user', lazy=True, cascade="all, delete-orphan")
     custos_fixos = db.relationship('CustoFixo', backref='user', lazy=True, cascade="all, delete-orphan")
     categorias = db.relationship('Categoria', backref='user', lazy=True, cascade="all, delete-orphan")
-    # --- NOVO RELACIONAMENTO ---
     receitas = db.relationship('Receita', backref='user', lazy=True, cascade="all, delete-orphan")
-    
     def set_password(self, password): self.password_hash = generate_password_hash(password)
     def check_password(self, password): return check_password_hash(self.password_hash, password)
 
-# --- NOVO MODELO: RECEITA ---
+
+# --- ALTERAÇÃO 1: Modelo de Receita reestruturado como Template de Recorrência ---
 class Receita(db.Model):
     __tablename__ = 'receitas'
     id = db.Column(db.Integer, primary_key=True)
     descricao = db.Column(db.String(100), nullable=False)
     valor = db.Column(db.Float, nullable=False)
-    data = db.Column(db.String(10), nullable=False) # Formato "dd/MM/yyyy"
+    tipo_recorrencia = db.Column(db.String(20), nullable=False) # 'unico', 'mensal', 'anual'
+    dia_do_mes = db.Column(db.Integer, nullable=True) # Nulo para 'unico'
+    mes_de_inicio = db.Column(db.Integer, nullable=True) # Nulo para 'unico'
+    ano_de_inicio = db.Column(db.Integer, nullable=True) # Nulo para 'unico'
+    data_unica = db.Column(db.String(10), nullable=True) # Apenas para tipo 'unico'
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     
     def to_dict(self):
@@ -58,7 +57,11 @@ class Receita(db.Model):
             'id': self.id,
             'descricao': self.descricao,
             'valor': self.valor,
-            'data': self.data
+            'tipoRecorrencia': self.tipo_recorrencia,
+            'diaDoMes': self.dia_do_mes,
+            'mesDeInicio': self.mes_de_inicio,
+            'anoDeInicio': self.ano_de_inicio,
+            'dataUnica': self.data_unica
         }
 
 # ... (Modelos Compra, CustoFixo, Categoria permanecem os mesmos)
@@ -105,7 +108,7 @@ class Categoria(db.Model):
         return {'id': self.id, 'nome': self.nome, 'pictogram': self.pictogram, 'parentId': self.parent_id}
 
 
-# --- FUNÇÕES AUXILIARES (sem alterações, exceto a do Dashboard) ---
+# --- FUNÇÕES AUXILIARES ---
 # ... (deve_incluir_custo_fixo, send_password_reset_email, calcular_gastos_do_mes)
 def deve_incluir_custo_fixo(custo, mes_alvo, ano_alvo):
     # Cria objetos de data para comparação, ignorando o dia
@@ -132,6 +135,31 @@ def deve_incluir_custo_fixo(custo, mes_alvo, ano_alvo):
     
     return False
 
+# --- NOVA FUNÇÃO AUXILIAR PARA RECEITAS ---
+def deve_incluir_receita(receita, mes_alvo, ano_alvo):
+    if receita.tipo_recorrencia == 'unico':
+        try:
+            _, mes, ano = map(int, receita.data_unica.split('/'))
+            return mes == mes_alvo and ano == ano_alvo
+        except:
+            return False
+
+    data_inicio = date(receita.ano_de_inicio, receita.mes_de_inicio, 1)
+    data_alvo = date(ano_alvo, mes_alvo, 1)
+
+    if data_alvo < data_inicio:
+        return False
+
+    meses_de_diferenca = (data_alvo.year - data_inicio.year) * 12 + (data_alvo.month - data_inicio.month)
+
+    if receita.tipo_recorrencia == 'mensal':
+        return True
+    elif receita.tipo_recorrencia == 'anual':
+        return meses_de_diferenca % 12 == 0
+    
+    return False
+
+# ... (send_password_reset_email e calcular_gastos_do_mes sem alterações)
 def send_password_reset_email(user):
     # ... (sem alterações)
     token = secrets.token_urlsafe(32)
@@ -171,6 +199,7 @@ def calcular_gastos_do_mes(user_id, mes, ano):
             total_fixo += custo.valor
             
     return total_variavel, total_fixo
+
 
 # --- ROTAS ---
 # ... (Rotas de Health Check, Autenticação, OCR, e CRUD de Compras/Custos Fixos/Categorias permanecem iguais)
@@ -443,35 +472,53 @@ def delete_categoria(categoria_id):
     db.session.commit()
     return jsonify({'mensagem': 'Categoria deletada com sucesso'}), 200
 
-# --- NOVAS ROTAS PARA O CRUD DE RECEITAS ---
+
+# --- ALTERAÇÃO 2: Rotas de Receitas modificadas para o novo modelo ---
 @app.route('/receitas', methods=['GET'])
 @jwt_required()
 def get_receitas():
     current_user_id = int(get_jwt_identity())
     mes_query = request.args.get('mes', default=datetime.now().month, type=int)
     ano_query = request.args.get('ano', default=datetime.now().year, type=int)
-    mes_ano_str = f"{mes_query:02d}/{ano_query}"
     
-    receitas_do_mes = Receita.query.filter(
-        Receita.user_id == current_user_id,
-        Receita.data.like(f"%/{mes_ano_str}")
-    ).all()
+    # Busca todos os templates de receita do usuário
+    templates_de_receita = Receita.query.filter_by(user_id=current_user_id).all()
     
-    return jsonify([r.to_dict() for r in receitas_do_mes]), 200
+    receitas_projetadas = []
+    for receita_template in templates_de_receita:
+        if deve_incluir_receita(receita_template, mes_query, ano_query):
+            # Para 'unico', a data vem do próprio registro. Para outros, é projetada.
+            data_final = receita_template.data_unica
+            if receita_template.tipo_recorrencia != 'unico':
+                data_final = f"{receita_template.dia_do_mes:02d}/{mes_query:02d}/{ano_query}"
+
+            receita_projetada = {
+                'id': receita_template.id, # Usamos o ID do template para edição/exclusão
+                'descricao': receita_template.descricao,
+                'valor': receita_template.valor,
+                'data': data_final
+            }
+            receitas_projetadas.append(receita_projetada)
+
+    return jsonify(receitas_projetadas), 200
 
 @app.route('/receitas', methods=['POST'])
 @jwt_required()
 def add_receita():
     current_user_id = int(get_jwt_identity())
     dados = request.get_json()
-    if not dados or not all(k in dados for k in ['descricao', 'valor', 'data']):
+    if not dados or not all(k in dados for k in ['descricao', 'valor', 'tipoRecorrencia']):
         return jsonify({'erro': 'Dados da receita estão incompletos.'}), 400
     
     nova_receita = Receita(
+        user_id=current_user_id,
         descricao=dados['descricao'],
         valor=dados['valor'],
-        data=dados['data'],
-        user_id=current_user_id
+        tipo_recorrencia=dados['tipoRecorrencia'],
+        dia_do_mes=dados.get('diaDoMes'),
+        mes_de_inicio=dados.get('mesDeInicio'),
+        ano_de_inicio=dados.get('anoDeInicio'),
+        data_unica=dados.get('dataUnica')
     )
     db.session.add(nova_receita)
     db.session.commit()
@@ -490,7 +537,11 @@ def update_receita(receita_id):
     dados = request.get_json()
     receita.descricao = dados.get('descricao', receita.descricao)
     receita.valor = dados.get('valor', receita.valor)
-    receita.data = dados.get('data', receita.data)
+    receita.tipo_recorrencia = dados.get('tipoRecorrencia', receita.tipo_recorrencia)
+    receita.dia_do_mes = dados.get('diaDoMes', receita.dia_do_mes)
+    receita.mes_de_inicio = dados.get('mesDeInicio', receita.mes_de_inicio)
+    receita.ano_de_inicio = dados.get('anoDeInicio', receita.ano_de_inicio)
+    receita.data_unica = dados.get('dataUnica', receita.data_unica)
     db.session.commit()
     return jsonify(receita.to_dict()), 200
 
@@ -541,13 +592,13 @@ def get_dashboard_data():
     total_variavel_atual, total_fixo_atual = calcular_gastos_do_mes(current_user_id, mes_atual, ano_atual)
     total_gasto_mes_atual = total_variavel_atual + total_fixo_atual
     
-    # --- ALTERAÇÃO NO DASHBOARD: CALCULAR RECEITAS ---
-    receitas_do_mes = Receita.query.filter(
-        Receita.user_id == current_user_id,
-        Receita.data.like(f"%/{mes_atual:02d}/{ano_atual}")
-    ).all()
-    total_receita_mes_atual = sum(r.valor for r in receitas_do_mes)
-    
+    # --- ALTERAÇÃO 3: Lógica do Dashboard para usar a projeção de receitas ---
+    templates_de_receita = Receita.query.filter_by(user_id=current_user_id).all()
+    total_receita_mes_atual = 0
+    for receita in templates_de_receita:
+        if deve_incluir_receita(receita, mes_atual, ano_atual):
+            total_receita_mes_atual += receita.valor
+
     # Calcula gastos do mês anterior
     mes_anterior = mes_atual - 1
     ano_anterior = ano_atual
@@ -566,11 +617,10 @@ def get_dashboard_data():
     
     proximos_custos_fixos.sort(key=lambda item: item['diaVencimento'])
     
-    # --- ALTERAÇÃO NO DASHBOARD: ADICIONAR NOVOS DADOS ---
     dashboard_data = {
         'totalGastoMes': total_gasto_mes_atual,
-        'totalReceitaMes': total_receita_mes_atual, # NOVO CAMPO
-        'saldoMes': total_receita_mes_atual - total_gasto_mes_atual, # NOVO CAMPO
+        'totalReceitaMes': total_receita_mes_atual,
+        'saldoMes': total_receita_mes_atual - total_gasto_mes_atual,
         'totalVariavel': total_variavel_atual,
         'totalFixo': total_fixo_atual,
         'proximosCustosFixos': proximos_custos_fixos[:3],
