@@ -393,65 +393,42 @@ def get_dashboard_data():
     hoje = date.today()
     mes_atual = hoje.month
     ano_atual = hoje.year
-
-    # --- 1. Calcular Gastos Totais e por Categoria ---
-    gastos_por_categoria = {}
+    
+    total_variavel = 0
+    total_fixo = 0
+    
     mes_ano_str = f"{mes_atual:02d}/{ano_atual}"
     compras_variaveis = Compra.query.filter(Compra.user_id == current_user_id, Compra.data.like(f"%/{mes_ano_str}")).all()
     for compra in compras_variaveis:
-        categoria = compra.categoria if compra.categoria else 'Não Categorizado'
-        valor = compra.quantidade * compra.valor_unitario
-        gastos_por_categoria[categoria] = gastos_por_categoria.get(categoria, 0) + valor
-    custos_fixos_todos = CustoFixo.query.filter_by(user_id=current_user_id).all()
-    for custo in custos_fixos_todos:
-        adicionar = False
-        mes_base = custo.mes_de_inicio
-        if custo.tipo_recorrencia == 'mensal': adicionar = True
-        elif custo.tipo_recorrencia == 'bimestral':
-            if (mes_atual - mes_base) >= 0 and (mes_atual - mes_base) % 2 == 0: adicionar = True
-        elif custo.tipo_recorrencia == 'trimestral':
-            if (mes_atual - mes_base) >= 0 and (mes_atual - mes_base) % 3 == 0: adicionar = True
-        elif custo.tipo_recorrencia == 'semestral':
-            if (mes_atual - mes_base) >= 0 and (mes_atual - mes_base) % 6 == 0: adicionar = True
-        elif custo.tipo_recorrencia == 'anual':
-            if mes_atual == mes_base: adicionar = True
-        if adicionar:
-            categoria = custo.categoria if custo.categoria else 'Não Categorizado'
-            gastos_por_categoria[categoria] = gastos_por_categoria.get(categoria, 0) + custo.valor
-    
-    total_gasto_mes = sum(gastos_por_categoria.values())
-    maiores_categorias_ordenadas = sorted(gastos_por_categoria.items(), key=lambda item: item[1], reverse=True)
-    maiores_categorias = [{'categoria': k, 'valor': v} for k, v in maiores_categorias_ordenadas[:5]]
+        total_variavel += compra.quantidade * compra.valor_unitario
 
-    # --- 2. Calcular Próximos Custos Fixos (LÓGICA CORRIGIDA) ---
+    custos_fixos_todos = CustoFixo.query.filter_by(user_id=current_user_id).all()
     proximos_custos_fixos = []
     for custo in custos_fixos_todos:
-        if custo.dia_do_mes >= hoje.day:
-            adicionar = False
-            mes_base = custo.mes_de_inicio
-            if custo.tipo_recorrencia == 'mensal': adicionar = True
-            elif custo.tipo_recorrencia == 'bimestral':
-                if (mes_atual - mes_base) >= 0 and (mes_atual - mes_base) % 2 == 0: adicionar = True
-            elif custo.tipo_recorrencia == 'trimestral':
-                if (mes_atual - mes_base) >= 0 and (mes_atual - mes_base) % 3 == 0: adicionar = True
-            elif custo.tipo_recorrencia == 'semestral':
-                if (mes_atual - mes_base) >= 0 and (mes_atual - mes_base) % 6 == 0: adicionar = True
-            elif custo.tipo_recorrencia == 'anual':
-                if mes_atual == mes_base: adicionar = True
-            
-            if adicionar:
-                proximos_custos_fixos.append({
-                    'nome': custo.nome,
-                    'diaVencimento': custo.dia_do_mes,
-                    'valor': custo.valor
-                })
+        adicionar_ao_total = False
+        mes_base = custo.mes_de_inicio
+        if custo.tipo_recorrencia == 'mensal': adicionar_ao_total = True
+        elif custo.tipo_recorrencia == 'bimestral':
+            if (mes_atual - mes_base) >= 0 and (mes_atual - mes_base) % 2 == 0: adicionar_ao_total = True
+        elif custo.tipo_recorrencia == 'trimestral':
+            if (mes_atual - mes_base) >= 0 and (mes_atual - mes_base) % 3 == 0: adicionar_ao_total = True
+        elif custo.tipo_recorrencia == 'semestral':
+            if (mes_atual - mes_base) >= 0 and (mes_atual - mes_base) % 6 == 0: adicionar_ao_total = True
+        elif custo.tipo_recorrencia == 'anual':
+            if mes_atual == mes_base: adicionar_ao_total = True
+        
+        if adicionar_ao_total:
+            total_fixo += custo.valor
+            if custo.dia_do_mes >= hoje.day:
+                proximos_custos_fixos.append({'nome': custo.nome, 'diaVencimento': custo.dia_do_mes, 'valor': custo.valor})
     
+    total_gasto_mes = total_variavel + total_fixo
     proximos_custos_fixos.sort(key=lambda item: item['diaVencimento'])
     
-    # --- 3. Montar o JSON Final ---
     dashboard_data = {
         'totalGastoMes': total_gasto_mes,
-        'maioresCategorias': maiores_categorias,
+        'totalVariavel': total_variavel,
+        'totalFixo': total_fixo,
         'proximosCustosFixos': proximos_custos_fixos[:3]
     }
     return jsonify(dashboard_data), 200
