@@ -7,7 +7,10 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, JWTManager
 from dados import extrair_dados_nota_fiscal, analisar_imagem_comprovante
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+import secrets
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail
 
 load_dotenv()
 
@@ -30,6 +33,11 @@ class User(db.Model):
     compras = db.relationship('Compra', backref='user', lazy=True, cascade="all, delete-orphan")
     custos_fixos = db.relationship('CustoFixo', backref='user', lazy=True, cascade="all, delete-orphan")
     categorias = db.relationship('Categoria', backref='user', lazy=True, cascade="all, delete-orphan")
+    
+    # NOVOS CAMPOS PARA O RESET DE SENHA
+    reset_token = db.Column(db.String(100), unique=True, nullable=True)
+    reset_token_expiration = db.Column(db.DateTime, nullable=True)
+    
     def set_password(self, password): self.password_hash = generate_password_hash(password)
     def check_password(self, password): return check_password_hash(self.password_hash, password)
 
@@ -69,7 +77,33 @@ class Categoria(db.Model):
     def to_dict(self):
         return {'id': self.id, 'nome': self.nome, 'pictogram': self.pictogram, 'parentId': self.parent_id}
 
-# --- Rotas de Autenticação ---
+# --- FUNÇÃO AUXILIAR PARA ENVIAR E-MAIL ---
+def send_password_reset_email(user):
+    token = secrets.token_urlsafe(32)
+    user.reset_token = token
+    user.reset_token_expiration = datetime.now(timezone.utc) + timedelta(hours=1)
+    db.session.commit()
+
+    message = Mail(
+        from_email=os.getenv('MAIL_FROM', 'seu-email-verificado@exemplo.com'),
+        to_emails=user.email,
+        subject='Redefinição de Senha - App Gestão Financeira',
+        html_content=f'''
+            <p>Olá,</p>
+            <p>Você solicitou a redefinição de sua senha. Use o seguinte token para criar uma nova senha no aplicativo:</p>
+            <h3>{token}</h3>
+            <p>Este token expirará em uma hora.</p>
+            <p>Se você não solicitou isso, por favor, ignore este e-mail.</p>
+        '''
+    )
+    try:
+        sendgrid_client = SendGridAPIClient(os.getenv('SENDGRID_API_KEY'))
+        response = sendgrid_client.send(message)
+        print(f"SendGrid response status: {response.status_code}")
+    except Exception as e:
+        print(f"Erro ao enviar email pelo SendGrid: {e}")
+
+# --- ROTAS ---
 @app.route('/')
 def health_check():
     return jsonify({"status": "healthy"}), 200
@@ -77,16 +111,15 @@ def health_check():
 @app.route('/register', methods=['POST'])
 def register():
     data = request.get_json()
-    email = data.get('email')
-    password = data.get('password')
-    if not email or not password:
-        return jsonify({"erro": "Email e senha são obrigatórios"}), 400
-    if User.query.filter_by(email=email).first():
-        return jsonify({"erro": "Este email já está em uso"}), 409
+    email, password = data.get('email'), data.get('password')
+    if not email or not password: return jsonify({"erro": "Email e senha são obrigatórios"}), 400
+    if User.query.filter_by(email=email).first(): return jsonify({"erro": "Este email já está em uso"}), 409
+    
     new_user = User(email=email)
     new_user.set_password(password)
     db.session.add(new_user)
     db.session.commit()
+    
     categorias_padrao = [
         {'nome': 'Alimentação', 'pictogram': 0xe25a}, {'nome': 'Assinaturas e serviços', 'pictogram': 0xe638},
         {'nome': 'Bares e restaurantes', 'pictogram': 0xe37a}, {'nome': 'Carro', 'pictogram': 0xe1d7},
@@ -109,26 +142,49 @@ def register():
 @app.route('/login', methods=['POST'])
 def login():
     data = request.get_json()
-    email = data.get('email')
-    password = data.get('password')
+    email, password = data.get('email'), data.get('password')
     user = User.query.filter_by(email=email).first()
     if user and user.check_password(password):
         access_token = create_access_token(identity=str(user.id))
         return jsonify(access_token=access_token)
     return jsonify({"erro": "Credenciais inválidas"}), 401
 
+@app.route('/forgot-password', methods=['POST'])
+def forgot_password():
+    dados = request.get_json()
+    email = dados.get('email')
+    if not email:
+        return jsonify({'erro': 'E-mail é obrigatório'}), 400
+    user = User.query.filter_by(email=email).first()
+    if user:
+        send_password_reset_email(user)
+    return jsonify({'mensagem': 'Se um usuário com este e-mail existir, um token de redefinição foi enviado.'}), 200
+
+@app.route('/reset-password', methods=['POST'])
+def reset_password():
+    dados = request.get_json()
+    token = dados.get('token')
+    new_password = dados.get('password')
+    if not token or not new_password:
+        return jsonify({'erro': 'Token e nova senha são obrigatórios'}), 400
+    user = User.query.filter_by(reset_token=token).first()
+    if not user or user.reset_token_expiration < datetime.now(timezone.utc):
+        return jsonify({'erro': 'Token inválido ou expirado'}), 400
+    user.set_password(new_password)
+    user.reset_token = None
+    user.reset_token_expiration = None
+    db.session.commit()
+    return jsonify({'mensagem': 'Senha redefinida com sucesso!'}), 200
+
 # --- ROTAS PROTEGIDAS DE PROCESSAMENTO (COM LÓGICA DE SALVAR) ---
 @app.route('/processar_nota', methods=['POST'])
 @jwt_required()
 def processar_nota_e_salvar():
     current_user_id = int(get_jwt_identity())
-    
     link_nota = request.json.get('url')
     if not link_nota:
         return jsonify({'erro': 'URL da nota fiscal não fornecida.'}), 400
-
     dados_extraidos = extrair_dados_nota_fiscal(link_nota)
-
     if dados_extraidos and dados_extraidos.get('itens_comprados'):
         for item in dados_extraidos['itens_comprados']:
             nova_compra = Compra(
@@ -140,7 +196,6 @@ def processar_nota_e_salvar():
                 user_id=current_user_id
             )
             db.session.add(nova_compra)
-        
         db.session.commit()
         return jsonify(dados_extraidos)
     else:
@@ -150,13 +205,10 @@ def processar_nota_e_salvar():
 @jwt_required()
 def processar_imagem_e_salvar():
     current_user_id = int(get_jwt_identity())
-    
     if 'comprovante' not in request.files:
         return jsonify({'erro': 'Nenhum arquivo de imagem enviado.'}), 400
-    
     arquivo_imagem = request.files['comprovante']
     dados_extraidos = analisar_imagem_comprovante(arquivo_imagem)
-    
     if dados_extraidos and dados_extraidos.get('itens_comprados'):
         for item in dados_extraidos['itens_comprados']:
             nova_compra = Compra(
@@ -168,7 +220,6 @@ def processar_imagem_e_salvar():
                 user_id=current_user_id
             )
             db.session.add(nova_compra)
-            
         db.session.commit()
         return jsonify(dados_extraidos)
     else:
