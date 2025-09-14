@@ -59,3 +59,4 @@ Flask-Migrate
 Flask-Bcrypt
 Flask-JWT-Extended
 python-dotenv
+sendgrid
