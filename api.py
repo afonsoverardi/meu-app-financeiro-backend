@@ -7,7 +7,7 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, JWTManager
 from dados import extrair_dados_nota_fiscal, analisar_imagem_comprovante
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, date
 import secrets
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
@@ -30,14 +30,11 @@ class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(120), unique=True, nullable=False)
     password_hash = db.Column(db.String(256), nullable=False)
+    reset_token = db.Column(db.String(100), unique=True, nullable=True)
+    reset_token_expiration = db.Column(db.DateTime(timezone=True), nullable=True)
     compras = db.relationship('Compra', backref='user', lazy=True, cascade="all, delete-orphan")
     custos_fixos = db.relationship('CustoFixo', backref='user', lazy=True, cascade="all, delete-orphan")
     categorias = db.relationship('Categoria', backref='user', lazy=True, cascade="all, delete-orphan")
-    
-    # NOVOS CAMPOS PARA O RESET DE SENHA
-    reset_token = db.Column(db.String(100), unique=True, nullable=True)
-    reset_token_expiration = db.Column(db.DateTime(timezone=True), nullable=True)
-    
     def set_password(self, password): self.password_hash = generate_password_hash(password)
     def check_password(self, password): return check_password_hash(self.password_hash, password)
 
@@ -83,18 +80,11 @@ def send_password_reset_email(user):
     user.reset_token = token
     user.reset_token_expiration = datetime.now(timezone.utc) + timedelta(hours=1)
     db.session.commit()
-
     message = Mail(
         from_email=os.getenv('MAIL_FROM', 'seu-email-verificado@exemplo.com'),
         to_emails=user.email,
         subject='Redefinição de Senha - App Gestão Financeira',
-        html_content=f'''
-            <p>Olá,</p>
-            <p>Você solicitou a redefinição de sua senha. Use o seguinte token para criar uma nova senha no aplicativo:</p>
-            <h3>{token}</h3>
-            <p>Este token expirará em uma hora.</p>
-            <p>Se você não solicitou isso, por favor, ignore este e-mail.</p>
-        '''
+        html_content=f'''<p>Olá,</p><p>Você solicitou a redefinição de sua senha. Use o seguinte token para criar uma nova senha no aplicativo:</p><h3>{token}</h3><p>Este token expirará em uma hora.</p><p>Se você não solicitou isso, por favor, ignore este e-mail.</p>'''
     )
     try:
         sendgrid_client = SendGridAPIClient(os.getenv('SENDGRID_API_KEY'))
@@ -105,8 +95,7 @@ def send_password_reset_email(user):
 
 # --- ROTAS ---
 @app.route('/')
-def health_check():
-    return jsonify({"status": "healthy"}), 200
+def health_check(): return jsonify({"status": "healthy"}), 200
 
 @app.route('/register', methods=['POST'])
 def register():
@@ -114,12 +103,10 @@ def register():
     email, password = data.get('email'), data.get('password')
     if not email or not password: return jsonify({"erro": "Email e senha são obrigatórios"}), 400
     if User.query.filter_by(email=email).first(): return jsonify({"erro": "Este email já está em uso"}), 409
-    
     new_user = User(email=email)
     new_user.set_password(password)
     db.session.add(new_user)
     db.session.commit()
-    
     categorias_padrao = [
         {'nome': 'Alimentação', 'pictogram': 0xe25a}, {'nome': 'Assinaturas e serviços', 'pictogram': 0xe638},
         {'nome': 'Bares e restaurantes', 'pictogram': 0xe37a}, {'nome': 'Carro', 'pictogram': 0xe1d7},
@@ -176,25 +163,16 @@ def reset_password():
     db.session.commit()
     return jsonify({'mensagem': 'Senha redefinida com sucesso!'}), 200
 
-# --- ROTAS PROTEGIDAS DE PROCESSAMENTO (COM LÓGICA DE SALVAR) ---
 @app.route('/processar_nota', methods=['POST'])
 @jwt_required()
 def processar_nota_e_salvar():
     current_user_id = int(get_jwt_identity())
     link_nota = request.json.get('url')
-    if not link_nota:
-        return jsonify({'erro': 'URL da nota fiscal não fornecida.'}), 400
+    if not link_nota: return jsonify({'erro': 'URL da nota fiscal não fornecida.'}), 400
     dados_extraidos = extrair_dados_nota_fiscal(link_nota)
     if dados_extraidos and dados_extraidos.get('itens_comprados'):
         for item in dados_extraidos['itens_comprados']:
-            nova_compra = Compra(
-                nome=item.get('nome', 'Item desconhecido'),
-                quantidade=item.get('quantidade', 1.0),
-                valor_unitario=item.get('valor_unitario', 0.0),
-                data=dados_extraidos.get('data', datetime.now().strftime("%d/%m/%Y")),
-                categoria=item.get('categoria'),
-                user_id=current_user_id
-            )
+            nova_compra = Compra(nome=item.get('nome', 'Item desconhecido'), quantidade=item.get('quantidade', 1.0), valor_unitario=item.get('valor_unitario', 0.0), data=dados_extraidos.get('data', datetime.now().strftime("%d/%m/%Y")), categoria=item.get('categoria'), user_id=current_user_id)
             db.session.add(nova_compra)
         db.session.commit()
         return jsonify(dados_extraidos)
@@ -205,27 +183,18 @@ def processar_nota_e_salvar():
 @jwt_required()
 def processar_imagem_e_salvar():
     current_user_id = int(get_jwt_identity())
-    if 'comprovante' not in request.files:
-        return jsonify({'erro': 'Nenhum arquivo de imagem enviado.'}), 400
+    if 'comprovante' not in request.files: return jsonify({'erro': 'Nenhum arquivo de imagem enviado.'}), 400
     arquivo_imagem = request.files['comprovante']
     dados_extraidos = analisar_imagem_comprovante(arquivo_imagem)
     if dados_extraidos and dados_extraidos.get('itens_comprados'):
         for item in dados_extraidos['itens_comprados']:
-            nova_compra = Compra(
-                nome=item.get('nome', 'Compra de imagem'),
-                quantidade=item.get('quantidade', 1.0),
-                valor_unitario=item.get('valor_unitario', 0.0),
-                data=dados_extraidos.get('data', datetime.now().strftime("%d/%m/%Y")),
-                categoria=item.get('categoria'),
-                user_id=current_user_id
-            )
+            nova_compra = Compra(nome=item.get('nome', 'Compra de imagem'), quantidade=item.get('quantidade', 1.0), valor_unitario=item.get('valor_unitario', 0.0), data=dados_extraidos.get('data', datetime.now().strftime("%d/%m/%Y")), categoria=item.get('categoria'), user_id=current_user_id)
             db.session.add(nova_compra)
         db.session.commit()
         return jsonify(dados_extraidos)
     else:
         return jsonify({'erro': 'Não foi possível analisar o comprovante.'}), 500
 
-# --- ROTAS DE DADOS (CRUD Compras) ---
 @app.route('/compras', methods=['GET'])
 @jwt_required()
 def get_compras():
@@ -294,7 +263,6 @@ def delete_compra(compra_id):
     db.session.commit()
     return jsonify({'mensagem': 'Compra deletada com sucesso'}), 200
 
-# --- ROTAS DE CUSTOS FIXOS (CRUD) ---
 @app.route('/custos-fixos', methods=['GET'])
 @jwt_required()
 def get_custos_fixos():
@@ -343,7 +311,6 @@ def delete_custo_fixo(custo_id):
     db.session.commit()
     return jsonify({'mensagem': 'Custo fixo deletado com sucesso'}), 200
 
-# --- ROTAS DE CATEGORIAS (CRUD) ---
 @app.route('/categorias', methods=['GET'])
 @jwt_required()
 def get_categorias():
@@ -388,7 +355,6 @@ def delete_categoria(categoria_id):
     db.session.commit()
     return jsonify({'mensagem': 'Categoria deletada com sucesso'}), 200
 
-# --- ROTA DE RELATÓRIOS ---
 @app.route('/relatorios/gastos-por-categoria', methods=['GET'])
 @jwt_required()
 def get_gastos_por_categoria():
@@ -419,6 +385,73 @@ def get_gastos_por_categoria():
             categoria = custo.categoria if custo.categoria else 'Não Categorizado'
             gastos_totais[categoria] = gastos_totais.get(categoria, 0) + custo.valor
     return jsonify(gastos_totais), 200
+
+# NOVA ROTA DO DASHBOARD
+@app.route('/dashboard', methods=['GET'])
+@jwt_required()
+def get_dashboard_data():
+    current_user_id = int(get_jwt_identity())
+    hoje = date.today()
+    mes_atual = hoje.month
+    ano_atual = hoje.year
+
+    # --- 1. Calcular Gastos Totais e por Categoria ---
+    # (Esta parte reutiliza a mesma lógica da rota de relatórios)
+    gastos_por_categoria = {}
+    mes_ano_str = f"{mes_atual:02d}/{ano_atual}"
+    compras_variaveis = Compra.query.filter(Compra.user_id == current_user_id, Compra.data.like(f"%/{mes_ano_str}")).all()
+    for compra in compras_variaveis:
+        categoria = compra.categoria if compra.categoria else 'Não Categorizado'
+        valor = compra.quantidade * compra.valor_unitario
+        gastos_por_categoria[categoria] = gastos_por_categoria.get(categoria, 0) + valor
+    custos_fixos_todos = CustoFixo.query.filter_by(user_id=current_user_id).all()
+    for custo in custos_fixos_todos:
+        adicionar = False
+        mes_base = custo.mes_de_inicio
+        if custo.tipo_recorrencia == 'mensal': adicionar = True
+        elif custo.tipo_recorrencia == 'bimestral':
+            if (mes_atual - mes_base) >= 0 and (mes_atual - mes_base) % 2 == 0: adicionar = True
+        elif custo.tipo_recorrencia == 'trimestral':
+            if (mes_atual - mes_base) >= 0 and (mes_atual - mes_base) % 3 == 0: adicionar = True
+        elif custo.tipo_recorrencia == 'semestral':
+            if (mes_atual - mes_base) >= 0 and (mes_atual - mes_base) % 6 == 0: adicionar = True
+        elif custo.tipo_recorrencia == 'anual':
+            if mes_atual == mes_base: adicionar = True
+        if adicionar:
+            categoria = custo.categoria if custo.categoria else 'Não Categorizado'
+            gastos_por_categoria[categoria] = gastos_por_categoria.get(categoria, 0) + custo.valor
+    
+    total_gasto_mes = sum(gastos_por_categoria.values())
+    maiores_categorias_ordenadas = sorted(gastos_por_categoria.items(), key=lambda item: item[1], reverse=True)
+    maiores_categorias = [{'categoria': k, 'valor': v} for k, v in maiores_categorias_ordenadas[:5]]
+
+    # --- 2. Calcular Próximos Custos Fixos ---
+    proximos_custos_fixos = []
+    for custo in custos_fixos_todos:
+        if custo.dia_do_mes >= hoje.day:
+            adicionar = False
+            mes_base = custo.mes_de_inicio
+            if custo.tipo_recorrencia == 'mensal': adicionar = True
+            elif custo.tipo_recorrencia == 'bimestral':
+                if (mes_atual - mes_base) >= 0 and (mes_atual - mes_base) % 2 == 0: adicionar = True
+            elif custo.tipo_recorrencia == 'trimestral':
+                if (mes_atual - mes_base) >= 0 and (mes_atual - mes_base) % 3 == 0: adicionar = True
+            elif custo.tipo_recorrencia == 'semestral':
+                if (mes_atual - mes_base) >= 0 and (mes_atual - mes_base) % 6 == 0: adicionar = True
+            elif custo.tipo_recorrencia == 'anual':
+                if mes_atual == mes_base: adicionar = True
+            if adicionar:
+                proximos_custos_fixos.append({'nome': custo.nome, 'diaVencimento': custo.dia_do_mes, 'valor': custo.valor})
+    
+    proximos_custos_fixos.sort(key=lambda item: item['diaVencimento'])
+    
+    # --- 3. Montar o JSON Final ---
+    dashboard_data = {
+        'totalGastoMes': total_gasto_mes,
+        'maioresCategorias': maiores_categorias,
+        'proximosCustosFixos': proximos_custos_fixos[:3]
+    }
+    return jsonify(dashboard_data), 200
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=os.getenv('PORT', 5000))
