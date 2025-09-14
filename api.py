@@ -93,6 +93,37 @@ def send_password_reset_email(user):
     except Exception as e:
         print(f"Erro ao enviar email pelo SendGrid: {e}")
 
+# --- FUNÇÃO AUXILIAR PARA CALCULAR GASTOS DE UM MÊS ---
+def calcular_gastos_do_mes(user_id, mes, ano):
+    total_variavel = 0
+    total_fixo = 0
+    
+    mes_ano_str = f"{mes:02d}/{ano}"
+    compras_variaveis = Compra.query.filter(
+        Compra.user_id == user_id,
+        Compra.data.like(f"%/{mes_ano_str}")
+    ).all()
+    for compra in compras_variaveis:
+        total_variavel += compra.quantidade * compra.valor_unitario
+
+    custos_fixos_todos = CustoFixo.query.filter_by(user_id=user_id).all()
+    for custo in custos_fixos_todos:
+        adicionar = False
+        mes_base = custo.mes_de_inicio
+        if custo.tipo_recorrencia == 'mensal': adicionar = True
+        elif custo.tipo_recorrencia == 'bimestral':
+            if (mes - mes_base) >= 0 and (mes - mes_base) % 2 == 0: adicionar = True
+        elif custo.tipo_recorrencia == 'trimestral':
+            if (mes - mes_base) >= 0 and (mes - mes_base) % 3 == 0: adicionar = True
+        elif custo.tipo_recorrencia == 'semestral':
+            if (mes - mes_base) >= 0 and (mes - mes_base) % 6 == 0: adicionar = True
+        elif custo.tipo_recorrencia == 'anual':
+            if mes == mes_base: adicionar = True
+        if adicionar:
+            total_fixo += custo.valor
+            
+    return total_variavel, total_fixo
+
 # --- ROTAS ---
 @app.route('/')
 def health_check(): return jsonify({"status": "healthy"}), 200
@@ -394,42 +425,43 @@ def get_dashboard_data():
     mes_atual = hoje.month
     ano_atual = hoje.year
     
-    total_variavel = 0
-    total_fixo = 0
+    total_variavel_atual, total_fixo_atual = calcular_gastos_do_mes(current_user_id, mes_atual, ano_atual)
+    total_gasto_mes_atual = total_variavel_atual + total_fixo_atual
     
-    mes_ano_str = f"{mes_atual:02d}/{ano_atual}"
-    compras_variaveis = Compra.query.filter(Compra.user_id == current_user_id, Compra.data.like(f"%/{mes_ano_str}")).all()
-    for compra in compras_variaveis:
-        total_variavel += compra.quantidade * compra.valor_unitario
+    mes_anterior = mes_atual - 1
+    ano_anterior = ano_atual
+    if mes_anterior == 0:
+        mes_anterior = 12
+        ano_anterior -= 1
+    total_variavel_anterior, total_fixo_anterior = calcular_gastos_do_mes(current_user_id, mes_anterior, ano_anterior)
+    total_gasto_mes_anterior = total_variavel_anterior + total_fixo_anterior
 
-    custos_fixos_todos = CustoFixo.query.filter_by(user_id=current_user_id).all()
     proximos_custos_fixos = []
+    custos_fixos_todos = CustoFixo.query.filter_by(user_id=current_user_id).all()
     for custo in custos_fixos_todos:
-        adicionar_ao_total = False
-        mes_base = custo.mes_de_inicio
-        if custo.tipo_recorrencia == 'mensal': adicionar_ao_total = True
-        elif custo.tipo_recorrencia == 'bimestral':
-            if (mes_atual - mes_base) >= 0 and (mes_atual - mes_base) % 2 == 0: adicionar_ao_total = True
-        elif custo.tipo_recorrencia == 'trimestral':
-            if (mes_atual - mes_base) >= 0 and (mes_atual - mes_base) % 3 == 0: adicionar_ao_total = True
-        elif custo.tipo_recorrencia == 'semestral':
-            if (mes_atual - mes_base) >= 0 and (mes_atual - mes_base) % 6 == 0: adicionar_ao_total = True
-        elif custo.tipo_recorrencia == 'anual':
-            if mes_atual == mes_base: adicionar_ao_total = True
-        
-        if adicionar_ao_total:
-            total_fixo += custo.valor
-            if custo.dia_do_mes >= hoje.day:
+        if custo.dia_do_mes >= hoje.day:
+            adicionar = False
+            mes_base = custo.mes_de_inicio
+            if custo.tipo_recorrencia == 'mensal': adicionar = True
+            elif custo.tipo_recorrencia == 'bimestral':
+                if (mes_atual - mes_base) >= 0 and (mes_atual - mes_base) % 2 == 0: adicionar = True
+            elif custo.tipo_recorrencia == 'trimestral':
+                if (mes_atual - mes_base) >= 0 and (mes_atual - mes_base) % 3 == 0: adicionar = True
+            elif custo.tipo_recorrencia == 'semestral':
+                if (mes_atual - mes_base) >= 0 and (mes_atual - mes_base) % 6 == 0: adicionar = True
+            elif custo.tipo_recorrencia == 'anual':
+                if mes_atual == mes_base: adicionar = True
+            if adicionar:
                 proximos_custos_fixos.append({'nome': custo.nome, 'diaVencimento': custo.dia_do_mes, 'valor': custo.valor})
     
-    total_gasto_mes = total_variavel + total_fixo
     proximos_custos_fixos.sort(key=lambda item: item['diaVencimento'])
     
     dashboard_data = {
-        'totalGastoMes': total_gasto_mes,
-        'totalVariavel': total_variavel,
-        'totalFixo': total_fixo,
-        'proximosCustosFixos': proximos_custos_fixos[:3]
+        'totalGastoMes': total_gasto_mes_atual,
+        'totalVariavel': total_variavel_atual,
+        'totalFixo': total_fixo_atual,
+        'proximosCustosFixos': proximos_custos_fixos[:3],
+        'comparativoMesAnterior': total_gasto_mes_atual - total_gasto_mes_anterior
     }
     return jsonify(dashboard_data), 200
 
