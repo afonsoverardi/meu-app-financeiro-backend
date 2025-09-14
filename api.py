@@ -1,5 +1,7 @@
+# api.py (Versão com Receitas)
+
 import os
-import json
+# ... (outros imports permanecem os mesmos)
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -14,7 +16,7 @@ from sendgrid.helpers.mail import Mail
 
 load_dotenv()
 
-# --- Configuração Inicial e Extensões ---
+# ... (Configuração Inicial e Extensões permanecem as mesmas)
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -26,9 +28,9 @@ jwt = JWTManager(app)
 
 # --- Modelos do Banco de Dados ---
 class User(db.Model):
-    # ... (sem alterações)
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
+    # ... (campos do User)
     email = db.Column(db.String(120), unique=True, nullable=False)
     password_hash = db.Column(db.String(256), nullable=False)
     reset_token = db.Column(db.String(100), unique=True, nullable=True)
@@ -36,11 +38,31 @@ class User(db.Model):
     compras = db.relationship('Compra', backref='user', lazy=True, cascade="all, delete-orphan")
     custos_fixos = db.relationship('CustoFixo', backref='user', lazy=True, cascade="all, delete-orphan")
     categorias = db.relationship('Categoria', backref='user', lazy=True, cascade="all, delete-orphan")
+    # --- NOVO RELACIONAMENTO ---
+    receitas = db.relationship('Receita', backref='user', lazy=True, cascade="all, delete-orphan")
+    
     def set_password(self, password): self.password_hash = generate_password_hash(password)
     def check_password(self, password): return check_password_hash(self.password_hash, password)
 
+# --- NOVO MODELO: RECEITA ---
+class Receita(db.Model):
+    __tablename__ = 'receitas'
+    id = db.Column(db.Integer, primary_key=True)
+    descricao = db.Column(db.String(100), nullable=False)
+    valor = db.Column(db.Float, nullable=False)
+    data = db.Column(db.String(10), nullable=False) # Formato "dd/MM/yyyy"
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'descricao': self.descricao,
+            'valor': self.valor,
+            'data': self.data
+        }
+
+# ... (Modelos Compra, CustoFixo, Categoria permanecem os mesmos)
 class Compra(db.Model):
-    # ... (sem alterações)
     __tablename__ = 'compras'
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(100), nullable=False)
@@ -61,14 +83,8 @@ class CustoFixo(db.Model):
     tipo_recorrencia = db.Column(db.String(20), nullable=False)
     dia_do_mes = db.Column(db.Integer, nullable=False)
     mes_de_inicio = db.Column(db.Integer, nullable=False, default=1)
-    
-    # --- ALTERAÇÃO CRÍTICA PARA A MIGRAÇÃO ---
-    # Adicionamos 'server_default' para que a migração funcione automaticamente
-    # em registros que já existem no banco de dados. O valor '2025' é um exemplo.
     ano_de_inicio = db.Column(db.Integer, nullable=False, server_default='2025')
-    
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    
     def to_dict(self):
         return {
             'id': self.id, 'nome': self.nome, 'valor': self.valor, 'categoria': self.categoria,
@@ -78,7 +94,6 @@ class CustoFixo(db.Model):
         }
 
 class Categoria(db.Model):
-    # ... (sem alterações)
     __tablename__ = 'categorias'
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(100), nullable=False)
@@ -89,7 +104,9 @@ class Categoria(db.Model):
     def to_dict(self):
         return {'id': self.id, 'nome': self.nome, 'pictogram': self.pictogram, 'parentId': self.parent_id}
 
-# --- FUNÇÃO AUXILIAR PARA VERIFICAR RECORRÊNCIA (LÓGICA CORRIGIDA) ---
+
+# --- FUNÇÕES AUXILIARES (sem alterações, exceto a do Dashboard) ---
+# ... (deve_incluir_custo_fixo, send_password_reset_email, calcular_gastos_do_mes)
 def deve_incluir_custo_fixo(custo, mes_alvo, ano_alvo):
     # Cria objetos de data para comparação, ignorando o dia
     data_inicio = date(custo.ano_de_inicio, custo.mes_de_inicio, 1)
@@ -115,7 +132,6 @@ def deve_incluir_custo_fixo(custo, mes_alvo, ano_alvo):
     
     return False
 
-# --- FUNÇÃO AUXILIAR PARA ENVIAR E-MAIL ---
 def send_password_reset_email(user):
     # ... (sem alterações)
     token = secrets.token_urlsafe(32)
@@ -135,7 +151,6 @@ def send_password_reset_email(user):
     except Exception as e:
         print(f"Erro ao enviar email pelo SendGrid: {e}")
 
-# --- FUNÇÃO AUXILIAR PARA CALCULAR GASTOS DE UM MÊS ---
 def calcular_gastos_do_mes(user_id, mes, ano):
     # ... (sem alterações)
     total_variavel = 0
@@ -151,16 +166,17 @@ def calcular_gastos_do_mes(user_id, mes, ano):
 
     custos_fixos_todos = CustoFixo.query.filter_by(user_id=user_id).all()
     for custo in custos_fixos_todos:
+        # --- ALTERAÇÃO 3: Usa a nova função de verificação ---
         if deve_incluir_custo_fixo(custo, mes, ano):
             total_fixo += custo.valor
             
     return total_variavel, total_fixo
 
 # --- ROTAS ---
+# ... (Rotas de Health Check, Autenticação, OCR, e CRUD de Compras/Custos Fixos/Categorias permanecem iguais)
 @app.route('/')
 def health_check(): return jsonify({"status": "healthy"}), 200
 
-# ... (Rotas /register, /login, /forgot-password, /reset-password, /processar_nota, /processar_imagem sem alterações)
 @app.route('/register', methods=['POST'])
 def register():
     data = request.get_json()
@@ -262,12 +278,12 @@ def processar_imagem_e_salvar():
 @app.route('/compras', methods=['GET'])
 @jwt_required()
 def get_compras():
-    # ... (sem alterações)
     current_user_id = int(get_jwt_identity())
     mes_query = request.args.get('mes', default=datetime.now().month, type=int)
     ano_query = request.args.get('ano', default=datetime.now().year, type=int)
+    mes_ano_str = f"{mes_query:02d}/{ano_query}"
     
-    compras_variaveis = Compra.query.filter(Compra.user_id == current_user_id, Compra.data.like(f"%/{mes_query:02d}/{ano_query}")).all()
+    compras_variaveis = Compra.query.filter(Compra.user_id == current_user_id, Compra.data.like(f"%/{mes_ano_str}")).all()
     custos_fixos_todos = CustoFixo.query.filter_by(user_id=current_user_id).all()
     
     compras_de_custos_fixos = []
@@ -287,7 +303,6 @@ def get_compras():
 @app.route('/compras', methods=['POST'])
 @jwt_required()
 def add_compra():
-    # ... (sem alterações)
     current_user_id = int(get_jwt_identity())
     dados = request.get_json()
     if not dados or not all(k in dados for k in ['nome', 'quantidade', 'valor_unitario', 'data']): return jsonify({'erro': 'Dados da compra estão incompletos.'}), 400
@@ -296,7 +311,6 @@ def add_compra():
     db.session.commit()
     return jsonify(nova_compra.to_dict()), 201
 
-# ... (Rotas /compras/<id> PUT e DELETE sem alterações)
 @app.route('/compras/<int:compra_id>', methods=['PUT'])
 @jwt_required()
 def update_compra(compra_id):
@@ -328,7 +342,6 @@ def delete_compra(compra_id):
 @app.route('/custos-fixos', methods=['GET'])
 @jwt_required()
 def get_custos_fixos():
-    # ... (sem alterações)
     current_user_id = int(get_jwt_identity())
     custos = CustoFixo.query.filter_by(user_id=current_user_id).order_by(CustoFixo.nome).all()
     return jsonify([custo.to_dict() for custo in custos]), 200
@@ -336,7 +349,6 @@ def get_custos_fixos():
 @app.route('/custos-fixos', methods=['POST'])
 @jwt_required()
 def add_custo_fixo():
-    # ... (sem alterações, mas o modelo agora usa server_default)
     current_user_id = int(get_jwt_identity())
     dados = request.get_json()
     required_keys = ['nome', 'valor', 'categoria', 'tipoRecorrencia', 'diaDoMes', 'mesDeInicio', 'anoDeInicio']
@@ -360,7 +372,6 @@ def add_custo_fixo():
 @app.route('/custos-fixos/<int:custo_id>', methods=['PUT'])
 @jwt_required()
 def update_custo_fixo(custo_id):
-    # ... (sem alterações)
     current_user_id = int(get_jwt_identity())
     custo_para_atualizar = CustoFixo.query.get(custo_id)
     if not custo_para_atualizar: return jsonify({'erro': 'Custo fixo não encontrado'}), 404
@@ -380,7 +391,6 @@ def update_custo_fixo(custo_id):
 @app.route('/custos-fixos/<int:custo_id>', methods=['DELETE'])
 @jwt_required()
 def delete_custo_fixo(custo_id):
-    # ... (sem alterações)
     current_user_id = int(get_jwt_identity())
     custo_para_deletar = CustoFixo.query.get(custo_id)
     if not custo_para_deletar: return jsonify({'erro': 'Custo fixo não encontrado'}), 404
@@ -389,7 +399,6 @@ def delete_custo_fixo(custo_id):
     db.session.commit()
     return jsonify({'mensagem': 'Custo fixo deletado com sucesso'}), 200
 
-# ... (Rotas de Categorias sem alterações)
 @app.route('/categorias', methods=['GET'])
 @jwt_required()
 def get_categorias():
@@ -434,6 +443,71 @@ def delete_categoria(categoria_id):
     db.session.commit()
     return jsonify({'mensagem': 'Categoria deletada com sucesso'}), 200
 
+# --- NOVAS ROTAS PARA O CRUD DE RECEITAS ---
+@app.route('/receitas', methods=['GET'])
+@jwt_required()
+def get_receitas():
+    current_user_id = int(get_jwt_identity())
+    mes_query = request.args.get('mes', default=datetime.now().month, type=int)
+    ano_query = request.args.get('ano', default=datetime.now().year, type=int)
+    mes_ano_str = f"{mes_query:02d}/{ano_query}"
+    
+    receitas_do_mes = Receita.query.filter(
+        Receita.user_id == current_user_id,
+        Receita.data.like(f"%/{mes_ano_str}")
+    ).all()
+    
+    return jsonify([r.to_dict() for r in receitas_do_mes]), 200
+
+@app.route('/receitas', methods=['POST'])
+@jwt_required()
+def add_receita():
+    current_user_id = int(get_jwt_identity())
+    dados = request.get_json()
+    if not dados or not all(k in dados for k in ['descricao', 'valor', 'data']):
+        return jsonify({'erro': 'Dados da receita estão incompletos.'}), 400
+    
+    nova_receita = Receita(
+        descricao=dados['descricao'],
+        valor=dados['valor'],
+        data=dados['data'],
+        user_id=current_user_id
+    )
+    db.session.add(nova_receita)
+    db.session.commit()
+    return jsonify(nova_receita.to_dict()), 201
+
+@app.route('/receitas/<int:receita_id>', methods=['PUT'])
+@jwt_required()
+def update_receita(receita_id):
+    current_user_id = int(get_jwt_identity())
+    receita = Receita.query.get(receita_id)
+    if not receita:
+        return jsonify({'erro': 'Receita não encontrada'}), 404
+    if receita.user_id != current_user_id:
+        return jsonify({'erro': 'Acesso não autorizado'}), 403
+        
+    dados = request.get_json()
+    receita.descricao = dados.get('descricao', receita.descricao)
+    receita.valor = dados.get('valor', receita.valor)
+    receita.data = dados.get('data', receita.data)
+    db.session.commit()
+    return jsonify(receita.to_dict()), 200
+
+@app.route('/receitas/<int:receita_id>', methods=['DELETE'])
+@jwt_required()
+def delete_receita(receita_id):
+    current_user_id = int(get_jwt_identity())
+    receita = Receita.query.get(receita_id)
+    if not receita:
+        return jsonify({'erro': 'Receita não encontrada'}), 404
+    if receita.user_id != current_user_id:
+        return jsonify({'erro': 'Acesso não autorizado'}), 403
+        
+    db.session.delete(receita)
+    db.session.commit()
+    return jsonify({'mensagem': 'Receita deletada com sucesso'}), 200
+
 @app.route('/relatorios/gastos-por-categoria', methods=['GET'])
 @jwt_required()
 def get_gastos_por_categoria():
@@ -441,38 +515,40 @@ def get_gastos_por_categoria():
     current_user_id = int(get_jwt_identity())
     mes_query = request.args.get('mes', default=datetime.now().month, type=int)
     ano_query = request.args.get('ano', default=datetime.now().year, type=int)
-    
-    compras_variaveis = Compra.query.filter(
-        Compra.user_id == current_user_id,
-        Compra.data.like(f"%/{mes_query:02d}/{ano_query}")
-    ).all()
+    mes_ano_str = f"{mes_query:02d}/{ano_query}"
+    compras_variaveis = Compra.query.filter(Compra.user_id == current_user_id, Compra.data.like(f"%/{mes_ano_str}")).all()
     custos_fixos_todos = CustoFixo.query.filter_by(user_id=current_user_id).all()
-    
     gastos_totais = {}
     for compra in compras_variaveis:
         categoria = compra.categoria if compra.categoria else 'Não Categorizado'
         valor = compra.quantidade * compra.valor_unitario
         gastos_totais[categoria] = gastos_totais.get(categoria, 0) + valor
-        
     for custo in custos_fixos_todos:
         if deve_incluir_custo_fixo(custo, mes_query, ano_query):
             categoria = custo.categoria if custo.categoria else 'Não Categorizado'
             gastos_totais[categoria] = gastos_totais.get(categoria, 0) + custo.valor
-            
     return jsonify(gastos_totais), 200
 
 @app.route('/dashboard', methods=['GET'])
 @jwt_required()
 def get_dashboard_data():
-    # ... (sem alterações)
     current_user_id = int(get_jwt_identity())
     hoje = date.today()
     mes_atual = hoje.month
     ano_atual = hoje.year
     
+    # Calcula gastos do mês
     total_variavel_atual, total_fixo_atual = calcular_gastos_do_mes(current_user_id, mes_atual, ano_atual)
     total_gasto_mes_atual = total_variavel_atual + total_fixo_atual
     
+    # --- ALTERAÇÃO NO DASHBOARD: CALCULAR RECEITAS ---
+    receitas_do_mes = Receita.query.filter(
+        Receita.user_id == current_user_id,
+        Receita.data.like(f"%/{mes_atual:02d}/{ano_atual}")
+    ).all()
+    total_receita_mes_atual = sum(r.valor for r in receitas_do_mes)
+    
+    # Calcula gastos do mês anterior
     mes_anterior = mes_atual - 1
     ano_anterior = ano_atual
     if mes_anterior == 0:
@@ -481,6 +557,7 @@ def get_dashboard_data():
     total_variavel_anterior, total_fixo_anterior = calcular_gastos_do_mes(current_user_id, mes_anterior, ano_anterior)
     total_gasto_mes_anterior = total_variavel_anterior + total_fixo_anterior
 
+    # Lógica de próximos custos fixos (sem alterações)
     proximos_custos_fixos = []
     custos_fixos_todos = CustoFixo.query.filter_by(user_id=current_user_id).all()
     for custo in custos_fixos_todos:
@@ -489,8 +566,11 @@ def get_dashboard_data():
     
     proximos_custos_fixos.sort(key=lambda item: item['diaVencimento'])
     
+    # --- ALTERAÇÃO NO DASHBOARD: ADICIONAR NOVOS DADOS ---
     dashboard_data = {
         'totalGastoMes': total_gasto_mes_atual,
+        'totalReceitaMes': total_receita_mes_atual, # NOVO CAMPO
+        'saldoMes': total_receita_mes_atual - total_gasto_mes_atual, # NOVO CAMPO
         'totalVariavel': total_variavel_atual,
         'totalFixo': total_fixo_atual,
         'proximosCustosFixos': proximos_custos_fixos[:3],
