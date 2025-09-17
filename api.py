@@ -1,7 +1,5 @@
-# api.py (Versão com Validação de Receitas)
-
 import os
-# ... (outros imports permanecem os mesmos)
+import requests
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -24,7 +22,6 @@ migrate = Migrate(app, db)
 jwt = JWTManager(app)
 
 # --- Modelos do Banco de Dados ---
-# ... (Nenhuma alteração nos modelos User, Receita, Compra, CustoFixo, Categoria)
 class User(db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
@@ -107,21 +104,17 @@ class Categoria(db.Model):
 
 
 # --- FUNÇÕES AUXILIARES ---
-# ... (Nenhuma alteração nas funções auxiliares)
 def deve_incluir_custo_fixo(custo, mes_alvo, ano_alvo):
-    # Cria objetos de data para comparação, ignorando o dia
     data_inicio = date(custo.ano_de_inicio, custo.mes_de_inicio, 1)
     data_alvo = date(ano_alvo, mes_alvo, 1)
 
-    # Se a data alvo for anterior à data de início, nunca incluir
     if data_alvo < data_inicio:
         return False
 
-    # Calcula a diferença total de meses entre a data de início e a data alvo
     meses_de_diferenca = (data_alvo.year - data_inicio.year) * 12 + (data_alvo.month - data_inicio.month)
 
     if custo.tipo_recorrencia == 'mensal':
-        return True # Se já passou da data de início, mensal sempre inclui
+        return True
     elif custo.tipo_recorrencia == 'bimestral':
         return meses_de_diferenca % 2 == 0
     elif custo.tipo_recorrencia == 'trimestral':
@@ -157,7 +150,6 @@ def deve_incluir_receita(receita, mes_alvo, ano_alvo):
     return False
 
 def send_password_reset_email(user):
-    # ... (sem alterações)
     token = secrets.token_urlsafe(32)
     user.reset_token = token
     user.reset_token_expiration = datetime.now(timezone.utc) + timedelta(hours=1)
@@ -171,12 +163,10 @@ def send_password_reset_email(user):
     try:
         sendgrid_client = SendGridAPIClient(os.getenv('SENDGRID_API_KEY'))
         response = sendgrid_client.send(message)
-        print(f"SendGrid response status: {response.status_code}")
     except Exception as e:
         print(f"Erro ao enviar email pelo SendGrid: {e}")
 
 def calcular_gastos_do_mes(user_id, mes, ano):
-    # ... (sem alterações)
     total_variavel = 0
     total_fixo = 0
     
@@ -190,17 +180,16 @@ def calcular_gastos_do_mes(user_id, mes, ano):
 
     custos_fixos_todos = CustoFixo.query.filter_by(user_id=user_id).all()
     for custo in custos_fixos_todos:
-        # --- ALTERAÇÃO 3: Usa a nova função de verificação ---
         if deve_incluir_custo_fixo(custo, mes, ano):
             total_fixo += custo.valor
             
     return total_variavel, total_fixo
 
 # --- ROTAS ---
-# ... (Rotas de Health Check, Autenticação, OCR, e CRUD de Compras/Custos Fixos/Categorias permanecem iguais)
 @app.route('/')
 def health_check(): return jsonify({"status": "healthy"}), 200
 
+# ROTAS DE AUTENTICAÇÃO E USUÁRIO
 @app.route('/register', methods=['POST'])
 def register():
     data = request.get_json()
@@ -211,6 +200,7 @@ def register():
     new_user.set_password(password)
     db.session.add(new_user)
     db.session.commit()
+    
     categorias_padrao = [
         {'nome': 'Alimentação', 'pictogram': 0xe25a}, {'nome': 'Assinaturas e serviços', 'pictogram': 0xe638},
         {'nome': 'Bares e restaurantes', 'pictogram': 0xe37a}, {'nome': 'Carro', 'pictogram': 0xe1d7},
@@ -267,6 +257,7 @@ def reset_password():
     db.session.commit()
     return jsonify({'mensagem': 'Senha redefinida com sucesso!'}), 200
 
+# ROTAS DE PROCESSAMENTO (QR CODE, IMAGEM, DANFE)
 @app.route('/processar_nota', methods=['POST'])
 @jwt_required()
 def processar_nota_e_salvar():
@@ -299,6 +290,23 @@ def processar_imagem_e_salvar():
     else:
         return jsonify({'erro': 'Não foi possível analisar o comprovante.'}), 500
 
+# ROTA FINAL E DEFINITIVA PARA A FUNCIONALIDADE DANFE (ESTRATÉGIA WEBVIEW)
+@app.route('/gerar-link-danfe', methods=['POST'])
+@jwt_required()
+def gerar_link_danfe():
+    dados_req = request.get_json()
+    chave_acesso = dados_req.get('chave')
+
+    if not chave_acesso or len(chave_acesso) != 44 or not chave_acesso.isdigit():
+        return jsonify({'erro': 'Chave de acesso inválida.'}), 400
+
+    # Usamos o link direto para um portal de consulta público e estável.
+    # O app irá abrir este link em uma WebView.
+    url_consulta = f"https://www.sefaz.rs.gov.br/NFCON/consultanfce.aspx?chNFe={chave_acesso}"
+    
+    return jsonify({'url': url_consulta}), 200
+
+# CRUD DE COMPRAS
 @app.route('/compras', methods=['GET'])
 @jwt_required()
 def get_compras():
@@ -363,6 +371,7 @@ def delete_compra(compra_id):
     db.session.commit()
     return jsonify({'mensagem': 'Compra deletada com sucesso'}), 200
 
+# CRUD DE CUSTOS FIXOS
 @app.route('/custos-fixos', methods=['GET'])
 @jwt_required()
 def get_custos_fixos():
@@ -423,6 +432,7 @@ def delete_custo_fixo(custo_id):
     db.session.commit()
     return jsonify({'mensagem': 'Custo fixo deletado com sucesso'}), 200
 
+# CRUD DE CATEGORIAS
 @app.route('/categorias', methods=['GET'])
 @jwt_required()
 def get_categorias():
@@ -467,8 +477,7 @@ def delete_categoria(categoria_id):
     db.session.commit()
     return jsonify({'mensagem': 'Categoria deletada com sucesso'}), 200
 
-
-# --- ROTAS DE RECEITAS COM VALIDAÇÃO ---
+# CRUD DE RECEITAS
 @app.route('/receitas', methods=['GET'])
 @jwt_required()
 def get_receitas():
@@ -479,17 +488,14 @@ def get_receitas():
 @app.route('/receitas', methods=['POST'])
 @jwt_required()
 def add_receita():
-    # --- ALTERAÇÃO: Adicionada validação robusta ---
     current_user_id = int(get_jwt_identity())
     dados = request.get_json()
 
-    # Validação básica
     if not dados or not all(k in dados for k in ['descricao', 'valor', 'tipoRecorrencia']):
         return jsonify({'erro': 'Dados essenciais da receita estão incompletos.'}), 400
 
     tipo_recorrencia = dados.get('tipoRecorrencia')
     
-    # Validação condicional
     if tipo_recorrencia == 'unico':
         if not dados.get('dataUnica'):
             return jsonify({'erro': 'Para receita de ocorrência única, a data é obrigatória.'}), 400
@@ -516,7 +522,6 @@ def add_receita():
 @app.route('/receitas/<int:receita_id>', methods=['PUT'])
 @jwt_required()
 def update_receita(receita_id):
-    # --- ALTERAÇÃO: Adicionada validação robusta ---
     current_user_id = int(get_jwt_identity())
     receita = Receita.query.get(receita_id)
     if not receita: return jsonify({'erro': 'Receita não encontrada'}), 404
@@ -525,14 +530,12 @@ def update_receita(receita_id):
     dados = request.get_json()
     if not dados: return jsonify({'erro': 'Nenhum dado para atualizar'}), 400
 
-    # Valida os dados recebidos antes de aplicar
     tipo_recorrencia = dados.get('tipoRecorrencia', receita.tipo_recorrencia)
     if tipo_recorrencia == 'unico':
         if 'dataUnica' in dados and not dados.get('dataUnica'):
             return jsonify({'erro': 'Para receita de ocorrência única, a data é obrigatória.'}), 400
     elif tipo_recorrencia in ['mensal', 'anual']:
         required_keys = ['diaDoMes', 'mesDeInicio', 'anoDeInicio']
-        # Verifica se alguma chave requerida está presente mas é nula
         if any(k in dados and dados[k] is None for k in required_keys):
              return jsonify({'erro': 'Para receitas recorrentes, o dia, mês e ano de início são obrigatórios.'}), 400
     
@@ -540,13 +543,12 @@ def update_receita(receita_id):
     receita.valor = dados.get('valor', receita.valor)
     receita.tipo_recorrencia = dados.get('tipoRecorrencia', receita.tipo_recorrencia)
     
-    # Lógica para limpar campos que não são mais necessários
     if receita.tipo_recorrencia == 'unico':
         receita.data_unica = dados.get('dataUnica', receita.data_unica)
         receita.dia_do_mes = None
         receita.mes_de_inicio = None
         receita.ano_de_inicio = None
-    else: # Recorrente
+    else:
         receita.data_unica = None
         receita.dia_do_mes = dados.get('diaDoMes', receita.dia_do_mes)
         receita.mes_de_inicio = dados.get('mesDeInicio', receita.mes_de_inicio)
@@ -558,7 +560,6 @@ def update_receita(receita_id):
 @app.route('/receitas/<int:receita_id>', methods=['DELETE'])
 @jwt_required()
 def delete_receita(receita_id):
-    # ... (sem alterações)
     current_user_id = int(get_jwt_identity())
     receita = Receita.query.get(receita_id)
     if not receita:
@@ -570,11 +571,10 @@ def delete_receita(receita_id):
     db.session.commit()
     return jsonify({'mensagem': 'Receita deletada com sucesso'}), 200
 
-
+# ROTAS DE RELATÓRIOS E DASHBOARD
 @app.route('/relatorios/gastos-por-categoria', methods=['GET'])
 @jwt_required()
 def get_gastos_por_categoria():
-    # ... (sem alterações)
     current_user_id = int(get_jwt_identity())
     mes_query = request.args.get('mes', default=datetime.now().month, type=int)
     ano_query = request.args.get('ano', default=datetime.now().year, type=int)
@@ -600,18 +600,15 @@ def get_dashboard_data():
     mes_atual = hoje.month
     ano_atual = hoje.year
     
-    # Calcula gastos do mês
     total_variavel_atual, total_fixo_atual = calcular_gastos_do_mes(current_user_id, mes_atual, ano_atual)
     total_gasto_mes_atual = total_variavel_atual + total_fixo_atual
     
-    # Lógica do Dashboard para usar a projeção de receitas 
     templates_de_receita = Receita.query.filter_by(user_id=current_user_id).all()
     total_receita_mes_atual = 0
     for receita in templates_de_receita:
         if deve_incluir_receita(receita, mes_atual, ano_atual):
             total_receita_mes_atual += receita.valor
 
-    # Calcula gastos do mês anterior
     mes_anterior = mes_atual - 1
     ano_anterior = ano_atual
     if mes_anterior == 0:
@@ -620,7 +617,6 @@ def get_dashboard_data():
     total_variavel_anterior, total_fixo_anterior = calcular_gastos_do_mes(current_user_id, mes_anterior, ano_anterior)
     total_gasto_mes_anterior = total_variavel_anterior + total_fixo_anterior
 
-    # Lógica de próximos custos fixos (sem alterações)
     proximos_custos_fixos = []
     custos_fixos_todos = CustoFixo.query.filter_by(user_id=current_user_id).all()
     for custo in custos_fixos_todos:
