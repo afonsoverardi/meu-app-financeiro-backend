@@ -9,7 +9,7 @@ from google.cloud import vision
 from google.oauth2 import service_account
 from datetime import datetime
 
-# --- Início da Configuração ---
+# --- Início da Configuração (sem alterações) ---
 API_KEY = os.getenv('GEMINI_API_KEY')
 model = None
 if API_KEY:
@@ -48,7 +48,7 @@ CATEGORIAS_PARA_PROMPT = ", ".join(f"'{cat}'" for cat in LISTA_DE_CATEGORIAS)
 # --- Fim da Configuração ---
 
 
-# --- Funções Auxiliares de IA ---
+# --- Funções Auxiliares de IA (sem alterações) ---
 def classificar_local_com_ia(nome_local):
     if not model: return "Desconhecido"
     try:
@@ -97,6 +97,7 @@ def resumir_e_categorizar_compra_com_ia(texto_completo):
 # --- Funções Principais de Processamento ---
 
 def extrair_dados_nota_fiscal(url):
+    # ... (esta função permanece sem alterações)
     try:
         if not url.startswith('http'):
             print(f"AVISO: O dado '{url}' não é uma URL válida. Ignorando.")
@@ -128,7 +129,6 @@ def extrair_dados_nota_fiscal(url):
             if quantidade_el and valor_unitario_el:
                 quantidade_limpa = quantidade_el.text.strip().replace('Qtde.:', '').replace(',', '.')
                 valor_unitario_limpo = valor_unitario_el.text.strip().replace('Vl. Unit.:', '').replace(',', '.')
-                
                 itens_brutos.append({
                     'nome': nome_item,
                     'quantidade': float(quantidade_limpa),
@@ -152,6 +152,7 @@ def extrair_dados_nota_fiscal(url):
         return None
 
 def converter_valor_brasileiro(valor_str):
+    # ... (esta função permanece sem alterações)
     if not valor_str:
         return 0.0
     valor_limpo = valor_str.strip().replace("R$", "")
@@ -169,20 +170,39 @@ def converter_valor_brasileiro(valor_str):
     except ValueError:
         return 0.0
 
-def analisar_imagem_comprovante(arquivo_imagem):
+# --- ESTA É A FUNÇÃO ATUALIZADA ---
+def analisar_imagem_comprovante(conteudo_imagem):
     if not vision_client:
         print("### ERRO CRÍTICO: Cliente do Google Cloud Vision não está inicializado. Verifique as credenciais. ###")
         return None
     try:
-        conteudo_imagem = arquivo_imagem.read()
         imagem_vision = vision.Image(content=conteudo_imagem)
         print("Enviando imagem para a Google Cloud Vision API...")
         response = vision_client.document_text_detection(image=imagem_vision)
+        
+        if not response.full_text_annotation:
+            print("AVISO: Nenhum texto foi detectado na imagem pela Vision API.")
+            return None
+            
         texto_extraido = response.full_text_annotation.text
         print("\n--- Texto extraído pela Vision API ---")
         print(texto_extraido)
         print("------------------------------------\n")
+
+        ### NOVA LÓGICA: Procurar primeiro pela chave da DANFE ###
+        # Remove espaços e quebras de linha para encontrar a sequência de 44 dígitos
+        texto_sem_espacos = texto_extraido.replace(" ", "").replace("\n", "").replace("-", "")
+        match = re.search(r'\b(\d{44})\b', texto_sem_espacos)
         
+        if match:
+            chave_acesso = match.group(0)
+            print(f"-> SUCESSO: Chave de acesso DANFE encontrada: {chave_acesso}")
+            # Retorna um dicionário especial para o api.py identificar
+            return {'tipo': 'danfe_chave', 'chave': chave_acesso}
+        
+        ### LÓGICA ANTIGA: Se não achou chave, processa como comprovante comum ###
+        print("-> AVISO: Nenhuma chave DANFE encontrada. Processando como comprovante comum.")
+
         # Extração da Data
         data_match = re.search(r"(\d{2}/\d{2}/\d{2,4})", texto_extraido)
         if data_match:
@@ -195,18 +215,13 @@ def analisar_imagem_comprovante(arquivo_imagem):
             data_compra = datetime.now().strftime("%d/%m/%Y")
             print("AVISO: Nenhuma data encontrada, usando a data de hoje.")
         
-        # **** LÓGICA DE EXTRAÇÃO DE VALOR CORRIGIDA E ROBUSTA ****
+        # Extração de valor
         valor_total = 0.0
-        valor_encontrado = False # Começa como Falso
-        
-        # Procura por todos os números que se parecem com dinheiro
+        valor_encontrado = False
         valores_encontrados = re.findall(r"[\d,]+\.\d{2}|[\d\.]+\,\d{2}", texto_extraido)
-        
         if valores_encontrados:
             ultimo_valor_str = valores_encontrados[-1]
             valor_total = converter_valor_brasileiro(ultimo_valor_str)
-            
-            # Apenas considera "encontrado" se o valor for maior que zero.
             if valor_total > 0:
                 valor_encontrado = True
         
