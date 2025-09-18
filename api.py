@@ -1,5 +1,6 @@
 import os
 import requests
+import re # Adicionado para expressões regulares
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -107,12 +108,9 @@ class Categoria(db.Model):
 def deve_incluir_custo_fixo(custo, mes_alvo, ano_alvo):
     data_inicio = date(custo.ano_de_inicio, custo.mes_de_inicio, 1)
     data_alvo = date(ano_alvo, mes_alvo, 1)
-
     if data_alvo < data_inicio:
         return False
-
     meses_de_diferenca = (data_alvo.year - data_inicio.year) * 12 + (data_alvo.month - data_inicio.month)
-
     if custo.tipo_recorrencia == 'mensal':
         return True
     elif custo.tipo_recorrencia == 'bimestral':
@@ -123,7 +121,6 @@ def deve_incluir_custo_fixo(custo, mes_alvo, ano_alvo):
         return meses_de_diferenca % 6 == 0
     elif custo.tipo_recorrencia == 'anual':
         return meses_de_diferenca % 12 == 0
-    
     return False
 
 def deve_incluir_receita(receita, mes_alvo, ano_alvo):
@@ -133,20 +130,15 @@ def deve_incluir_receita(receita, mes_alvo, ano_alvo):
             return mes == mes_alvo and ano == ano_alvo
         except:
             return False
-
     data_inicio = date(receita.ano_de_inicio, receita.mes_de_inicio, 1)
     data_alvo = date(ano_alvo, mes_alvo, 1)
-
     if data_alvo < data_inicio:
         return False
-
     meses_de_diferenca = (data_alvo.year - data_inicio.year) * 12 + (data_alvo.month - data_inicio.month)
-
     if receita.tipo_recorrencia == 'mensal':
         return True
     elif receita.tipo_recorrencia == 'anual':
         return meses_de_diferenca % 12 == 0
-    
     return False
 
 def send_password_reset_email(user):
@@ -169,7 +161,6 @@ def send_password_reset_email(user):
 def calcular_gastos_do_mes(user_id, mes, ano):
     total_variavel = 0
     total_fixo = 0
-    
     mes_ano_str = f"{mes:02d}/{ano}"
     compras_variaveis = Compra.query.filter(
         Compra.user_id == user_id,
@@ -177,12 +168,10 @@ def calcular_gastos_do_mes(user_id, mes, ano):
     ).all()
     for compra in compras_variaveis:
         total_variavel += compra.quantidade * compra.valor_unitario
-
     custos_fixos_todos = CustoFixo.query.filter_by(user_id=user_id).all()
     for custo in custos_fixos_todos:
         if deve_incluir_custo_fixo(custo, mes, ano):
             total_fixo += custo.valor
-            
     return total_variavel, total_fixo
 
 # --- ROTAS ---
@@ -200,7 +189,6 @@ def register():
     new_user.set_password(password)
     db.session.add(new_user)
     db.session.commit()
-    
     categorias_padrao = [
         {'nome': 'Alimentação', 'pictogram': 0xe25a}, {'nome': 'Assinaturas e serviços', 'pictogram': 0xe638},
         {'nome': 'Bares e restaurantes', 'pictogram': 0xe37a}, {'nome': 'Carro', 'pictogram': 0xe1d7},
@@ -274,21 +262,49 @@ def processar_nota_e_salvar():
     else:
         return jsonify({'erro': 'Não foi possível processar a nota fiscal.'}), 500
 
+# --- ESTA É A ROTA ATUALIZADA ---
 @app.route('/processar_imagem', methods=['POST'])
 @jwt_required()
 def processar_imagem_e_salvar():
     current_user_id = int(get_jwt_identity())
-    if 'comprovante' not in request.files: return jsonify({'erro': 'Nenhum arquivo de imagem enviado.'}), 400
-    arquivo_imagem = request.files['comprovante']
+    if 'comprovante' not in request.files:
+        return jsonify({'erro': 'Nenhum arquivo de imagem enviado.'}), 400
+    
+    arquivo_imagem = request.files['comprovante'].read()
+    
+    # A função em dados.py agora pode retornar dois formatos de dicionário
     dados_extraidos = analisar_imagem_comprovante(arquivo_imagem)
-    if dados_extraidos and dados_extraidos.get('itens_comprados'):
+
+    if not dados_extraidos:
+        return jsonify({'erro': 'Não foi possível extrair dados da imagem.'}), 500
+
+    # Verifica se a função encontrou uma chave de acesso DANFE
+    if dados_extraidos.get('tipo') == 'danfe_chave':
+        chave_acesso = dados_extraidos.get('chave')
+        print(f"Chave de acesso encontrada via Google Vision: {chave_acesso}")
+        
+        # Gera a URL da Sefaz e retorna para o app
+        url_consulta = f"https://www.sefaz.rs.gov.br/NFCON/consultanfce.aspx?chNFe={chave_acesso}"
+        return jsonify({'url_danfe': url_consulta}), 200
+    
+    # Se não era uma chave, então deve ser uma lista de itens de compra
+    elif dados_extraidos.get('itens_comprados'):
+        print("Analisando como comprovante de compras comum...")
         for item in dados_extraidos['itens_comprados']:
-            nova_compra = Compra(nome=item.get('nome', 'Compra de imagem'), quantidade=item.get('quantidade', 1.0), valor_unitario=item.get('valor_unitario', 0.0), data=dados_extraidos.get('data', datetime.now().strftime("%d/%m/%Y")), categoria=item.get('categoria'), user_id=current_user_id)
+            nova_compra = Compra(
+                nome=item.get('nome', 'Item desconhecido'),
+                quantidade=item.get('quantidade', 1.0),
+                valor_unitario=item.get('valor_unitario', 0.0),
+                data=dados_extraidos.get('data', datetime.now().strftime("%d/%m/%Y")),
+                categoria=item.get('categoria'),
+                user_id=current_user_id
+            )
             db.session.add(nova_compra)
         db.session.commit()
         return jsonify(dados_extraidos)
-    else:
-        return jsonify({'erro': 'Não foi possível analisar o comprovante.'}), 500
+
+    # Se chegou até aqui, a imagem não continha nem uma chave nem itens válidos
+    return jsonify({'erro': 'Não foi possível identificar uma chave DANFE ou itens de compra na imagem.'}), 422
 
 # ROTA FINAL E DEFINITIVA PARA A FUNCIONALIDADE DANFE (ESTRATÉGIA WEBVIEW)
 @app.route('/gerar-link-danfe', methods=['POST'])
@@ -296,14 +312,10 @@ def processar_imagem_e_salvar():
 def gerar_link_danfe():
     dados_req = request.get_json()
     chave_acesso = dados_req.get('chave')
-
     if not chave_acesso or len(chave_acesso) != 44 or not chave_acesso.isdigit():
         return jsonify({'erro': 'Chave de acesso inválida.'}), 400
-
-    # Usamos o link direto para um portal de consulta público e estável.
     # O app irá abrir este link em uma WebView.
     url_consulta = f"https://www.sefaz.rs.gov.br/NFCON/consultanfce.aspx?chNFe={chave_acesso}"
-    
     return jsonify({'url': url_consulta}), 200
 
 # CRUD DE COMPRAS
@@ -490,12 +502,9 @@ def get_receitas():
 def add_receita():
     current_user_id = int(get_jwt_identity())
     dados = request.get_json()
-
     if not dados or not all(k in dados for k in ['descricao', 'valor', 'tipoRecorrencia']):
         return jsonify({'erro': 'Dados essenciais da receita estão incompletos.'}), 400
-
     tipo_recorrencia = dados.get('tipoRecorrencia')
-    
     if tipo_recorrencia == 'unico':
         if not dados.get('dataUnica'):
             return jsonify({'erro': 'Para receita de ocorrência única, a data é obrigatória.'}), 400
@@ -504,7 +513,6 @@ def add_receita():
             return jsonify({'erro': 'Para receitas recorrentes, o dia, mês e ano de início são obrigatórios.'}), 400
     else:
         return jsonify({'erro': f'Tipo de recorrência inválido: {tipo_recorrencia}'}), 400
-
     nova_receita = Receita(
         user_id=current_user_id,
         descricao=dados['descricao'],
@@ -526,10 +534,8 @@ def update_receita(receita_id):
     receita = Receita.query.get(receita_id)
     if not receita: return jsonify({'erro': 'Receita não encontrada'}), 404
     if receita.user_id != current_user_id: return jsonify({'erro': 'Acesso não autorizado'}), 403
-        
     dados = request.get_json()
     if not dados: return jsonify({'erro': 'Nenhum dado para atualizar'}), 400
-
     tipo_recorrencia = dados.get('tipoRecorrencia', receita.tipo_recorrencia)
     if tipo_recorrencia == 'unico':
         if 'dataUnica' in dados and not dados.get('dataUnica'):
@@ -538,11 +544,9 @@ def update_receita(receita_id):
         required_keys = ['diaDoMes', 'mesDeInicio', 'anoDeInicio']
         if any(k in dados and dados[k] is None for k in required_keys):
              return jsonify({'erro': 'Para receitas recorrentes, o dia, mês e ano de início são obrigatórios.'}), 400
-    
     receita.descricao = dados.get('descricao', receita.descricao)
     receita.valor = dados.get('valor', receita.valor)
     receita.tipo_recorrencia = dados.get('tipoRecorrencia', receita.tipo_recorrencia)
-    
     if receita.tipo_recorrencia == 'unico':
         receita.data_unica = dados.get('dataUnica', receita.data_unica)
         receita.dia_do_mes = None
@@ -553,7 +557,6 @@ def update_receita(receita_id):
         receita.dia_do_mes = dados.get('diaDoMes', receita.dia_do_mes)
         receita.mes_de_inicio = dados.get('mesDeInicio', receita.mes_de_inicio)
         receita.ano_de_inicio = dados.get('anoDeInicio', receita.ano_de_inicio)
-
     db.session.commit()
     return jsonify(receita.to_dict()), 200
 
@@ -562,11 +565,8 @@ def update_receita(receita_id):
 def delete_receita(receita_id):
     current_user_id = int(get_jwt_identity())
     receita = Receita.query.get(receita_id)
-    if not receita:
-        return jsonify({'erro': 'Receita não encontrada'}), 404
-    if receita.user_id != current_user_id:
-        return jsonify({'erro': 'Acesso não autorizado'}), 403
-        
+    if not receita: return jsonify({'erro': 'Receita não encontrada'}), 404
+    if receita.user_id != current_user_id: return jsonify({'erro': 'Acesso não autorizado'}), 403
     db.session.delete(receita)
     db.session.commit()
     return jsonify({'mensagem': 'Receita deletada com sucesso'}), 200
@@ -599,16 +599,13 @@ def get_dashboard_data():
     hoje = date.today()
     mes_atual = hoje.month
     ano_atual = hoje.year
-    
     total_variavel_atual, total_fixo_atual = calcular_gastos_do_mes(current_user_id, mes_atual, ano_atual)
     total_gasto_mes_atual = total_variavel_atual + total_fixo_atual
-    
     templates_de_receita = Receita.query.filter_by(user_id=current_user_id).all()
     total_receita_mes_atual = 0
     for receita in templates_de_receita:
         if deve_incluir_receita(receita, mes_atual, ano_atual):
             total_receita_mes_atual += receita.valor
-
     mes_anterior = mes_atual - 1
     ano_anterior = ano_atual
     if mes_anterior == 0:
@@ -616,15 +613,12 @@ def get_dashboard_data():
         ano_anterior -= 1
     total_variavel_anterior, total_fixo_anterior = calcular_gastos_do_mes(current_user_id, mes_anterior, ano_anterior)
     total_gasto_mes_anterior = total_variavel_anterior + total_fixo_anterior
-
     proximos_custos_fixos = []
     custos_fixos_todos = CustoFixo.query.filter_by(user_id=current_user_id).all()
     for custo in custos_fixos_todos:
         if custo.dia_do_mes >= hoje.day and deve_incluir_custo_fixo(custo, mes_atual, ano_atual):
             proximos_custos_fixos.append({'nome': custo.nome, 'diaVencimento': custo.dia_do_mes, 'valor': custo.valor})
-    
     proximos_custos_fixos.sort(key=lambda item: item['diaVencimento'])
-    
     dashboard_data = {
         'totalGastoMes': total_gasto_mes_atual,
         'totalReceitaMes': total_receita_mes_atual,
